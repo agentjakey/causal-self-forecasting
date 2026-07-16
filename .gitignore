@@ -216,3 +216,202 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+.secrets/
+secrets/
+*.pem
+*.key
+*.crt
+credentials.json
+service-account*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.cache/
+
+# Jupyter
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# Model and dataset caches
+.cache/
+huggingface/
+transformers_cache/
+datasets_cache/
+torch_cache/
+wandb/
+mlruns/
+lightning_logs/
+
+# Model weights and checkpoints
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.gguf
+checkpoints/
+models/
+artifacts/adapters/*
+artifacts/checkpoints/*
+artifacts/model_cache/*
+
+# Keep directory structure
+!artifacts/adapters/.gitkeep
+!artifacts/checkpoints/.gitkeep
+!artifacts/model_cache/.gitkeep
+
+# Raw and processed datasets
+data/raw/*
+data/processed/*
+data/cache/*
+data/downloads/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/cache/.gitkeep
+!data/downloads/.gitkeep
+!data/README.md
+
+# Experiment outputs
+results/runs/*
+results/private/*
+results/tmp/*
+results/cache/*
+!results/runs/.gitkeep
+!results/private/.gitkeep
+!results/tmp/.gitkeep
+!results/cache/.gitkeep
+!results/README.md
+
+# Public, verified exports may be committed
+# Do not ignore results/public/
+
+# Private research notes and internal planning
+docs/private/
+docs/internal/
+docs/drafts/
+docs/notes/
+docs/reviewer_notes/
+docs/unreleased/
+private/
+internal/
+scratch/
+notes/
+TODO_PRIVATE.md
+RESEARCH_NOTES_PRIVATE.md
+
+# Local selection seeds and commitment salts
+selection_seed.txt
+*_selection_seed.txt
+*_salt.txt
+commitment_salts/
+private_payloads/
+
+# Generated reports and temporary exports
+reports/generated/
+paper/build/
+paper/tmp/
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+
+# Node and dashboard
+node_modules/
+dashboard/node_modules/
+dashboard/.next/
+dashboard/out/
+dashboard/dist/
+dashboard/coverage/
+dashboard/.vercel/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local dashboard data
+dashboard/public/data/private/
+dashboard/public/data/tmp/
+
+# Editors and IDEs
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Claude and coding-agent local state
+.claude/
+CLAUDE.local.md
+.cursor/
+.cursorrules.local
+.aider*
+.codex/
+
+# Operating systems
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~

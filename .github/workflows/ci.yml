@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is the development platform and Linux is where any GPU run will happen.
+        # Path handling and atomic replace differ between them, so both are tested.
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev --extra torch
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run pyright
+
+      - name: Validate configs
+        run: uv run csf doctor
+
+      - name: Test
+        # The suite is offline: it builds its own fixture model and never downloads weights.
+        run: uv run pytest -q -m "not slow"
+
+  integrity:
+    name: no fabricated results
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Check for fabricated results
+        # Run on its own so that a failure here is unmistakable in the checks list rather than
+        # buried among ordinary test failures.
+        run: uv run pytest tests/test_no_fake_results.py -q
+
+      - name: Check for committed secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          leaked=$(git ls-files | grep -E '(selection_seed|_salt\.txt$|private_payloads/|\.secrets/)' || true)
+          if [ -n "$leaked" ]; then
+            echo "secrets or private protocol artifacts are tracked by git:"
+            echo "$leaked"
+            exit 1
+          fi

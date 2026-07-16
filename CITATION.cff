@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+title: "CSF-Bench: Causal Self-Forecasting Lab"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: Ortiz
+    given-names: Jacob
+    alias: agentjakey
+repository-code: "https://github.com/agentjakey/causal-self-forecasting"
+abstract: >-
+  A reproducible benchmark testing whether language models can make precommitted, calibrated
+  predictions about how their outputs change under blinded causal interventions on their
+  internal states. Forecasts are committed with a salted hash before an intervention is
+  selected, then scored against the measured effect. Includes same-prompt state-swap controls,
+  norm-matched random directions, and a held-out intervention mechanism.
+keywords:
+  - interpretability
+  - ai-safety
+  - causal-intervention
+  - benchmark
+  - language-models
+license: MIT
+version: 0.0.1
+date-released: "2026-07-15"

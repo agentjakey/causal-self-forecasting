@@ -1,0 +1,16 @@
+# Primary model for CSF-Bench v0.1.
+#
+# The revision is the commit sha of the model repository as resolved on 2026-07-15. It is
+# pinned rather than tracking main so that a rerun loads the same weights.
+#
+# These weights are gated on Hugging Face (gated: manual). Running with this config requires
+# accepting the Gemma license on the model page and authenticating, for example with
+# `hf auth login`. `csf doctor` reports whether that access is in place.
+name: gemma3_1b_it
+kind: huggingface
+model_id: google/gemma-3-1b-it
+revision: dcc83ea841ab6100d6b47a070329e1ba4cf78752
+# float32 on CPU, bfloat16 on a GPU. The measured quantity is a difference of logits, and
+# float16 rounding is a meaningful fraction of the effects being estimated.
+dtype: float32
+device: auto

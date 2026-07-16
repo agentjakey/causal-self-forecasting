@@ -1,0 +1,9 @@
+# Replication model. Not used until the 1B pipeline is complete (Phase 13).
+#
+# Revision is the commit sha resolved on 2026-07-15. Gated on Hugging Face, same as the 1B.
+name: gemma3_4b_it
+kind: huggingface
+model_id: google/gemma-3-4b-it
+revision: 093f9f388b31de276ce2de164bdc2081324b9767
+dtype: bfloat16
+device: auto

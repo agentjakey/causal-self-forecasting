@@ -294,10 +294,23 @@ lightning_logs/
 *.onnx
 *.gguf
 checkpoints/
-models/
+# Anchored to the repository root so that src/causal_self_forecasting/models/
+# (package code) stays tracked.
+/models/
 artifacts/adapters/*
 artifacts/checkpoints/*
 artifacts/model_cache/*
+
+# Locally built fixture model. Regenerated on demand from a fixed seed, so committing it
+# would add build output to the repository. Its weights are already excluded above, and
+# committing the config without the weights would leave half a model tracked.
+artifacts/fixtures/
+
+# Estimated and generated directions. Reproducible from the run seed and the training data,
+# and every use of one records its hash in the run manifest. A validated direction that is
+# worth publishing alongside a result can be added deliberately with `git add -f`.
+artifacts/directions/*
+!artifacts/directions/.gitkeep
 
 # Keep directory structure
 !artifacts/adapters/.gitkeep

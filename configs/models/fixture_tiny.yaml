@@ -1,0 +1,13 @@
+# A tiny, randomly initialized model built locally. Used by the smoke experiment and the
+# test suite so that the pipeline can be exercised offline, with no gated weights.
+#
+# It has no knowledge and its answers are noise. No number produced with this config is a
+# result about language models, and the exporter must never publish one.
+name: fixture_tiny
+kind: fixture
+model_id: tiny_llama
+revision: fixture-v1
+dtype: float32
+device: cpu
+fixture_hidden_size: 64
+fixture_num_layers: 4

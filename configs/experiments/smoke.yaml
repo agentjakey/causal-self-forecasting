@@ -1,0 +1,36 @@
+# Smoke experiment: exercises the full pipeline offline in seconds.
+#
+# It uses the fixture model, which is randomly initialized and knows nothing. This config
+# tests that capture, intervention, commitment, selection, and verification work. It measures
+# nothing about language models, and its outputs must never be exported to the dashboard.
+#
+# The direction is `smoke_synthetic`, a seeded random vector created by
+# `csf directions synthetic`. It is not a bias direction and has passed no causal validation.
+# Real experiments use a direction produced by `csf directions estimate` and validated
+# against matched random controls first.
+name: smoke
+seed: 12345
+
+model_ref: configs/models/fixture_tiny.yaml
+task_ref: configs/tasks/arc_mcq.yaml
+intervention_refs:
+  - configs/interventions/smoke_residual_add.yaml
+
+# The fixture has 4 blocks, so valid layer indices are 0 (embeddings) through 4.
+capture_layers: [1, 2, 3]
+capture_position: -1
+
+direction_id: smoke_synthetic
+random_control_count: 2
+candidates_per_trial: 4
+max_trials: 8
+
+heldout_mechanisms:
+  - activation_patch
+
+trial_splits:
+  - train
+  - val
+  - test
+
+rerun_tolerance: 1.0e-4

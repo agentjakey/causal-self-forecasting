@@ -1,0 +1,11 @@
+# Residual addition sized for the 4-block fixture model.
+#
+# Separate from residual_add.yaml because the fixture has 4 blocks and Gemma 3 1B has 26, so
+# the layer indices are not interchangeable. Two files is honest; one file with a layer index
+# that means different things depending on the model is not.
+name: smoke_residual_add
+mechanism: residual_add
+mechanism_version: "1.0"
+layers: [2]
+positions: [-1]
+strengths: [-1.0, 0.0, 1.0]

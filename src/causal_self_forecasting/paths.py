@@ -23,6 +23,11 @@ ENVIRONMENT = "environment.json"
 ARTIFACT_HASHES = "artifact_hashes.json"
 RUN_LOG = "run.log.jsonl"
 
+# Systems-benchmark artifacts. Named distinctly from the trial artifacts above so that a
+# benchmark run directory can never be mistaken for an experiment run directory.
+BENCHMARK = "benchmark.json"
+BENCHMARK_ITEMS = "benchmark_items.jsonl"
+
 
 def data_dir() -> Path:
     return repo_root() / "data"

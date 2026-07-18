@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import TaskConfig
-from ..hashing import atomic_write_json, hash_file, hash_object, write_jsonl
+from ..hashing import atomic_write_json, hash_file, hash_object, read_jsonl, write_jsonl
 from ..logging_utils import info, warn
 from ..paths import manifests_dir, processed_dir
 from ..schemas import PromptVariant, TaskItem
@@ -151,6 +151,29 @@ def load_task_items(config: TaskConfig, max_items: int | None = None) -> list[Ta
     if limit is not None:
         items = items[:limit]
     return items
+
+
+def load_prepared_task(task_name: str) -> tuple[list[TaskItem], list[PromptVariant]]:
+    """Read a task that `prepare_task` has already written.
+
+    The single reader for prepared data, so that trial generation and the systems benchmark
+    cannot drift into disagreeing about what is on disk.
+    """
+    directory = processed_dir() / task_name
+    items_path = directory / "items.jsonl"
+    variants_path = directory / "variants.jsonl"
+    if not items_path.exists() or not variants_path.exists():
+        raise TaskLoadError(
+            f"no prepared data for task {task_name!r} at {directory}; "
+            f"run `csf data prepare --config configs/tasks/{task_name}.yaml` first"
+        )
+    items = [TaskItem.model_validate(row) for row in read_jsonl(items_path)]
+    variants = [PromptVariant.model_validate(row) for row in read_jsonl(variants_path)]
+    return items, variants
+
+
+def task_manifest_path(task_name: str) -> Path:
+    return manifests_dir() / f"{task_name}.json"
 
 
 def _split_counts(records: list[TaskItem] | list[PromptVariant]) -> dict[str, int]:

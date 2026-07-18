@@ -29,7 +29,6 @@ from ..paths import (
     TRIAL_MANIFEST,
     directions_dir,
     ensure_run_dir,
-    processed_dir,
     run_dir,
 )
 from ..reproducibility import derive_seed, environment_snapshot, set_global_seed
@@ -41,6 +40,7 @@ from ..schemas import (
     TaskItem,
     TrialRecord,
 )
+from ..tasks.loader import TaskLoadError, load_prepared_task
 from .candidates import build_candidate_set, candidate_set_hash, default_templates
 from .states import STATES_FILENAME, StateShardWriter
 
@@ -50,17 +50,11 @@ class TrialGenerationError(RuntimeError):
 
 
 def _load_processed(task_name: str) -> tuple[list[TaskItem], list[PromptVariant]]:
-    directory = processed_dir() / task_name
-    items_path = directory / "items.jsonl"
-    variants_path = directory / "variants.jsonl"
-    if not items_path.exists() or not variants_path.exists():
-        raise TrialGenerationError(
-            f"no prepared data for task {task_name!r} at {directory}; "
-            f"run `csf data prepare --config configs/tasks/{task_name}.yaml` first"
-        )
-    items = [TaskItem.model_validate(row) for row in read_jsonl(items_path)]
-    variants = [PromptVariant.model_validate(row) for row in read_jsonl(variants_path)]
-    return items, variants
+    """Read prepared data, reporting a missing dataset as a trial-generation failure."""
+    try:
+        return load_prepared_task(task_name)
+    except TaskLoadError as error:
+        raise TrialGenerationError(str(error)) from error
 
 
 def _training_grid(

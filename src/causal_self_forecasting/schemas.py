@@ -12,12 +12,13 @@ Design rules:
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from . import SCHEMA_VERSION
 
@@ -528,5 +529,219 @@ class PublicDashboardRecord(Versioned):
             raise ValueError(
                 "refusing to export a run whose commitments did not verify; "
                 "publishing it would misrepresent the protocol"
+            )
+        return self
+
+
+# ---------------------------------------------------------------------------
+# Systems benchmark
+#
+# A systems benchmark answers "does this model run here, how fast, and does the capture path
+# work on real weights". It is not a CSF-Bench result and never becomes one. The records
+# below are kept structurally incapable of claiming otherwise: `scientific_result` is typed
+# `Literal[False]`, so a record asserting a scientific finding cannot be constructed at all,
+# rather than merely being discouraged.
+# ---------------------------------------------------------------------------
+
+
+class BenchmarkClassification(StrEnum):
+    SYSTEMS_BENCHMARK = "systems_benchmark"
+    FIXTURE_SYSTEMS_TEST = "fixture_systems_test"
+
+
+class AccessStatus(StrEnum):
+    """How the weights were reached, or why they were not.
+
+    These are kept distinct because the remedies are completely different. Telling a user
+    "model load failed" when the real problem is an unaccepted license sends them to debug
+    the wrong thing.
+    """
+
+    CACHED_LOAD = "cached_load"
+    REMOTE_DOWNLOAD = "remote_download"
+    NO_AUTHENTICATION = "no_authentication"
+    GATED_ACCESS_DENIED = "gated_access_denied"
+    REVISION_UNAVAILABLE = "revision_unavailable"
+    NETWORK_FAILURE = "network_failure"
+    OFFLINE_CACHE_MISS = "offline_cache_miss"
+    INSUFFICIENT_DISK_SPACE = "insufficient_disk_space"
+    MODEL_LOAD_FAILURE = "model_load_failure"
+    FIXTURE_LOCAL = "fixture_local"
+
+
+def _check_finite_non_negative(value: float | None, name: str) -> float | None:
+    if value is None:
+        return None
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite, got {value}")
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative, got {value}")
+    return value
+
+
+class BenchmarkModelInfo(Base):
+    model_id: str
+    revision: str
+    tokenizer_revision: str
+    device: str
+    dtype: str
+    num_layers: int = Field(gt=0)
+    hidden_dim: int = Field(gt=0)
+    access_status: AccessStatus
+
+
+class BenchmarkTaskInfo(Base):
+    dataset: str
+    split: Split
+    item_count: int = Field(ge=0)
+    manifest_hash: HashString | None = None
+    label_token_ids: dict[str, int] = Field(default_factory=dict)
+    label_prefix: str = ""
+    scoring_format: str
+
+
+class BenchmarkTiming(Base):
+    """Wall-clock costs.
+
+    `model_load_seconds` covers the tokenizer as well, because the centralized loader builds
+    both together and splitting it would mean duplicating that path just to time it.
+    """
+
+    model_load_seconds: float
+    tokenization_seconds_total: float
+    warmup_runs: int = Field(ge=0)
+    timed_runs: int = Field(gt=0)
+    forward_seconds_median: float
+    forward_seconds_p90: float
+    forward_seconds_min: float
+    forward_seconds_max: float
+    evaluation_seconds_total: float
+    capture_overhead_seconds: float | None = None
+    representative_prompt_tokens: int = Field(gt=0)
+    total_timed_tokens: int = Field(ge=0)
+    prefill_tokens_per_second: float | None = None
+
+    @field_validator(
+        "model_load_seconds",
+        "tokenization_seconds_total",
+        "forward_seconds_median",
+        "forward_seconds_p90",
+        "forward_seconds_min",
+        "forward_seconds_max",
+        "evaluation_seconds_total",
+        "capture_overhead_seconds",
+        "prefill_tokens_per_second",
+    )
+    @classmethod
+    def _finite(cls, value: float | None, info) -> float | None:
+        return _check_finite_non_negative(value, info.field_name)
+
+
+class BenchmarkMemory(Base):
+    """Process memory, or an explicit null with the reason.
+
+    A number that could not be measured is reported as null. Substituting an estimate would
+    make the artifact look complete while being fiction.
+    """
+
+    rss_bytes_after_load: int | None = Field(default=None, ge=0)
+    rss_bytes_peak: int | None = Field(default=None, ge=0)
+    measurement: str
+
+
+class BenchmarkEvaluation(Base):
+    """Clean multiple-choice accuracy.
+
+    Accuracy over a handful of items is a smoke check that scoring is wired up, not a
+    capability measurement. The sample count travels with it so it cannot be read as one.
+    """
+
+    scored_items: int = Field(ge=0)
+    correct_items: int = Field(ge=0)
+    accuracy: float | None = None
+
+    @model_validator(mode="after")
+    def _check_counts(self) -> BenchmarkEvaluation:
+        if self.correct_items > self.scored_items:
+            raise ValueError(
+                f"correct_items {self.correct_items} exceeds scored_items {self.scored_items}"
+            )
+        if self.scored_items == 0:
+            if self.accuracy is not None:
+                raise ValueError("accuracy must be null when no items were scored")
+            return self
+        expected = self.correct_items / self.scored_items
+        if self.accuracy is None or abs(self.accuracy - expected) > 1e-9:
+            raise ValueError(
+                f"accuracy {self.accuracy} does not match correct_items / scored_items ({expected})"
+            )
+        return self
+
+
+class BenchmarkCapture(Base):
+    """Evidence that the hook-owned capture path works on these weights.
+
+    `capture_point_verified` is the important field. It is set by patching the layer with a
+    known vector and reading it back, which is the check that caught the transformers 5
+    hidden-state indexing problem. `hook_fired` alone would not: a hook can fire and still be
+    read back from the wrong point.
+    """
+
+    layer: int = Field(ge=0)
+    hook_fired: bool
+    shape: list[int]
+    dtype: str
+    capture_point_verified: bool
+    max_abs_patch_error: float | None = None
+
+
+class ComputeEstimate(Base):
+    """A planning estimate, with its assumptions attached.
+
+    Deliberately not a prediction. It is arithmetic on one measured median forward time, and
+    the assumptions are carried in the artifact so a reader can redo it with their own.
+    """
+
+    assumptions: dict[str, Any]
+    estimated_forward_count: int = Field(ge=0)
+    estimated_cpu_seconds: float = Field(ge=0.0)
+    estimated_cpu_hours: float = Field(ge=0.0)
+    lora_estimated_cpu_hours: float | None = Field(default=None, ge=0.0)
+    small_clean_validation_practical_on_cpu: bool
+    full_sweep_practical_on_cpu: bool
+    lora_training_practical_on_cpu: bool
+    gpu_rental_recommended: bool
+    notes: list[str] = Field(default_factory=list)
+
+
+class BenchmarkRecord(Versioned):
+    """The aggregate systems-benchmark artifact."""
+
+    run_id: Identifier
+    status: str
+    classification: BenchmarkClassification
+    # Typed as a literal rather than a bool: this makes a benchmark record that claims to be
+    # a scientific result unconstructible, instead of merely against policy.
+    scientific_result: Literal[False] = False
+    fixture_only: bool
+    model: BenchmarkModelInfo
+    task: BenchmarkTaskInfo
+    timing: BenchmarkTiming
+    memory: BenchmarkMemory
+    evaluation: BenchmarkEvaluation
+    capture: BenchmarkCapture
+    compute_estimate: ComputeEstimate | None = None
+    limitations: list[str] = Field(min_length=1)
+    config_hashes: dict[str, str] = Field(default_factory=dict)
+    provenance: list[ArtifactHashRecord] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _check_classification(self) -> BenchmarkRecord:
+        expected_fixture = self.classification is BenchmarkClassification.FIXTURE_SYSTEMS_TEST
+        if self.fixture_only != expected_fixture:
+            raise ValueError(
+                f"classification {self.classification.value} and fixture_only "
+                f"{self.fixture_only} disagree; a fixture run must be labeled as one"
             )
         return self

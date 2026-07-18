@@ -116,8 +116,9 @@ to end on CPU.
 Definition of done: model loads, answer labels score correctly, clean reruns reproduce
 within tolerance, hidden-state capture works.
 
-Done against the fixture model. **Not yet run against Gemma 3 1B**, which is what the phase
-ultimately exists for, so it stays open until a real model has been loaded and scored.
+Done against the fixture model. The phase stays open until a real pinned Gemma run has
+succeeded, because that is what the phase exists for. `csf benchmark` is the command that
+closes it.
 
 - [x] Model loading with pinned revision recorded in the run manifest
 - [x] Answer-label token resolution with rejection of unscoreable templates
@@ -125,8 +126,29 @@ ultimately exists for, so it stays open until a real model has been loaded and s
 - [x] Hidden-state capture at configured layers and positions
 - [x] Device and dtype resolution in one place
 - [x] Clean-rerun determinism check with a stated numerical tolerance
+- [x] `csf benchmark`: a systems and clean-model sanity benchmark, classified non-scientific,
+      with access classification, CPU timing, memory, and capture verification on real weights
 - [ ] Load Gemma 3 1B and measure clean accuracy on ARC
 - [ ] Measure the CPU cost of one forward pass, to decide the GPU question with data
+
+### The systems benchmark
+
+`csf benchmark` is deliberately not a CSF-Bench result and is typed so it cannot become one.
+It exists to answer the operational questions the compute decision depends on:
+
+* Do the pinned weights load on this machine?
+* What does one forward pass cost here?
+* Does the hook-owned capture path work on the real architecture, not only on the fixture?
+
+The third question is the reason this is worth a command rather than a script. The
+transformers 5 hidden-state indexing problem was caught on the fixture; the benchmark repeats
+the same check on real weights by patching a layer with a known vector and requiring that
+reading that layer back returns it. A hook can fire and still be read from the wrong point.
+
+Access failures are classified rather than collapsed into "it did not work": no
+authentication, authenticated without the Gemma license, unavailable revision, network
+failure, offline cache miss, insufficient disk, and load failure are all distinct, because
+their remedies are.
 
 ## Phase 3: Intervention system
 

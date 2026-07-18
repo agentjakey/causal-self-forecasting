@@ -86,7 +86,107 @@ exporter will never publish a number produced from it.
 ### Real models
 
 `configs/models/gemma3_1b_it.yaml` pins Gemma 3 1B to a commit sha. Those weights are gated on
-Hugging Face: accept the license on the model page and authenticate (`hf auth login`) first.
+Hugging Face, so two separate things are needed before they will load.
+
+**1. Authenticate.** A token with read access is enough. Either form works:
+
+```powershell
+uv run hf auth login
+# or, without installing into the project environment:
+uvx hf auth login
+```
+
+The token is read from the Hugging Face credential store. This project never prints, logs, or
+writes it to an artifact, and it does not require `HF_TOKEN` to be set when the credential
+store already has a valid login.
+
+**2. Accept the Gemma conditions.** Authentication alone is not enough. The account must also
+accept the usage conditions on the model page at
+https://huggingface.co/google/gemma-3-1b-it. These are separate failures and `csf benchmark`
+reports them separately, because the fixes are different.
+
+The model is Gemma, not Gemini. The weights are about 2.0 GB.
+
+## Systems benchmark
+
+Before deciding whether to rent a GPU, `csf benchmark` answers three operational questions:
+do the pinned weights load here, what does a forward pass cost on this machine, and does the
+hook-owned capture path work on real weights.
+
+Start with one item:
+
+```powershell
+uv run csf benchmark `
+  --model-config configs/models/gemma3_1b_it.yaml `
+  --task-config configs/tasks/arc_mcq.yaml `
+  --split test `
+  --max-items 1 `
+  --warmup-runs 1 `
+  --timed-runs 3
+```
+
+Then, only if the one-item timing looks reasonable, twenty:
+
+```powershell
+uv run csf benchmark `
+  --model-config configs/models/gemma3_1b_it.yaml `
+  --task-config configs/tasks/arc_mcq.yaml `
+  --split test `
+  --max-items 20 `
+  --warmup-runs 2 `
+  --timed-runs 5
+```
+
+Both need `csf data prepare` to have run first. `--offline` requires locally cached weights
+and fails clearly if they are missing rather than reaching for the network.
+
+### A systems benchmark is not a scientific result
+
+This is the distinction the whole repository is built around, so the benchmark enforces it
+rather than relying on anyone remembering it.
+
+A **systems benchmark** measures whether the machine can run the model, and how fast. A
+**CSF-Bench result** would measure whether a forecasting method predicts intervention
+effects. The second requires a model organism, a validated direction, and a forecaster, none
+of which exist yet.
+
+Every benchmark artifact carries its classification:
+
+```json
+{ "classification": "systems_benchmark", "scientific_result": false, "fixture_only": false }
+```
+
+Fixture runs are labeled `fixture_systems_test` with `fixture_only: true`. `scientific_result`
+is typed as a literal false, so a record claiming otherwise cannot be constructed at all. A
+benchmark run has no forecasts or commitments in it, so `csf verify run` will not verify it
+and the public exporter cannot accept it.
+
+The accuracy a benchmark reports is a scoring smoke check over a handful of items. It is not a
+capability measurement and must not be quoted as one.
+
+### The compute decision
+
+A successful benchmark includes a planning estimate built from the measured median forward
+time:
+
+```text
+estimated_forward_count = number_of_prompts x model_states_per_prompt
+                          x candidates_per_trial x forward_passes_per_candidate
+estimated_cpu_seconds   = estimated_forward_count x measured_median_forward_seconds
+```
+
+The assumptions travel with the number in the artifact, and their source is
+`docs/preregistration.md` section 9. The estimate reports whether a small clean-model
+validation still looks practical on CPU, whether a full intervention sweep does, and whether
+LoRA training does. It is arithmetic, not a prediction, and it does not rent anything. The
+compute decision is the maintainer's.
+
+### Known limitations
+
+CPU timing is machine-specific and says nothing about other hardware. Latency is measured on
+one representative prompt at batch size one, so it ignores batching. Memory is reported from
+the OS where that is reliable, and reported as null with a reason where it is not, rather than
+being estimated.
 
 ## Repository layout
 

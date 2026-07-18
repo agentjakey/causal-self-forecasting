@@ -28,6 +28,7 @@ from .config import (
 from .hashing import atomic_write_json
 from .logging_utils import configure_logging, info
 from .paths import RUN_LOG, ensure_run_dir, new_run_id, run_dir
+from .schemas import Split
 
 app = typer.Typer(
     name="csf",
@@ -241,6 +242,92 @@ def interventions_validate(
     if not report["passed"]:
         typer.secho(
             f"required intervention controls failed: {report['required_failed']}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def benchmark(
+    model_config: Path = typer.Option(
+        ..., "--model-config", help="Path to a model config. Its pinned revision is used as is."
+    ),
+    task_config: Path = typer.Option(..., "--task-config", help="Path to a prepared task config."),
+    split: str = typer.Option("test", "--split", help="Which split to draw prompts from."),
+    max_items: int = typer.Option(1, "--max-items", min=1, help="How many prompts to score."),
+    warmup_runs: int = typer.Option(1, "--warmup-runs", min=0, help="Untimed forwards first."),
+    timed_runs: int = typer.Option(3, "--timed-runs", min=1, help="Timed forwards for latency."),
+    capture_layer: int | None = typer.Option(
+        None, "--capture-layer", help="Layer to verify capture at. Defaults to the middle layer."
+    ),
+    seed: int = typer.Option(12345, "--seed", help="Seed for deterministic prompt selection."),
+    output_dir: Path | None = typer.Option(
+        None, "--output-dir", help="Where to write artifacts. Defaults to a run directory."
+    ),
+    offline: bool = typer.Option(
+        False, "--offline", help="Require locally cached weights and never reach the network."
+    ),
+    force: bool = typer.Option(False, "--force", help="Overwrite a non-empty output directory."),
+) -> None:
+    """Measure whether a real model runs here, how fast, and whether capture works.
+
+    This is a systems and clean-model sanity benchmark, not a CSF-Bench result. It loads the
+    pinned weights, scores a few multiple-choice items from their answer-token logits, times
+    forward passes on this machine, and verifies that the hook-owned capture path reads back
+    the point it intervened on.
+
+    Nothing it writes is a scientific finding, and the artifacts are typed so they cannot be
+    mistaken for one.
+    """
+    from .benchmark import BenchmarkError, run_benchmark
+    from .models.scoring import LabelTokenError
+
+    model_settings = load_config(model_config, ModelConfig)
+    task_settings = load_config(task_config, TaskConfig)
+
+    try:
+        resolved_split = Split(split)
+    except ValueError as error:
+        raise typer.BadParameter(
+            f"unknown split {split!r}; valid splits are {[item.value for item in Split]}"
+        ) from error
+
+    try:
+        report = run_benchmark(
+            model_config=model_settings,
+            task_config=task_settings,
+            model_config_path=model_config,
+            task_config_path=task_config,
+            split=resolved_split,
+            max_items=max_items,
+            warmup_runs=warmup_runs,
+            timed_runs=timed_runs,
+            capture_layer=capture_layer,
+            seed=seed,
+            output_dir=output_dir,
+            offline=offline,
+            force=force,
+        )
+    except BenchmarkError as error:
+        # The status is the whole point of the message: it says which of the several very
+        # different problems this is, so the reader knows what to go and fix.
+        typer.secho(
+            f"benchmark failed [{error.status.value}]: {error}", fg=typer.colors.RED, err=True
+        )
+        raise typer.Exit(code=1) from error
+    except LabelTokenError as error:
+        typer.secho(
+            f"benchmark failed [answer_labels_unscoreable]: {error}", fg=typer.colors.RED, err=True
+        )
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+
+    if not report["capture"]["capture_point_verified"]:
+        typer.secho(
+            "capture point verification failed: the layer read back does not match the layer "
+            "patched, so intervention results from this model would not mean what they claim",
             fg=typer.colors.RED,
             err=True,
         )

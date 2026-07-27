@@ -123,23 +123,95 @@ pinned revision. `csf benchmark --offline` correctly reported `offline_cache_mis
 cache path and the remedy, which confirms the access classification works against Gemma
 without downloading it.
 
-**Phase 2 remains open.** The definition of done is a real pinned Gemma run, and one has not
-happened.
+The download later succeeded on a retry from the same machine, so the entry below supersedes
+this one. The network intermittency was real, not a code fault.
+
+## 2026-07-18: real Gemma 3 1B systems benchmark (systems measurement, not a scientific result)
+
+The pinned Gemma 3 1B weights downloaded and the benchmark completed. Values below are read
+directly from
+`results/runs/benchmark-gemma3_1b_it-20260718T040531Z/benchmark.json`, a `systems_benchmark`
+artifact with `scientific_result: false`. They measure this machine, not the model's ability.
+
+**Model.** google/gemma-3-1b-it, revision `dcc83ea841ab6100d6b47a070329e1ba4cf78752`,
+tokenizer at the same revision, device cpu, dtype float32, 26 layers, hidden dim 1152, access
+status `remote_download`.
+
+**Scoring.** Format `raw_completion_next_token_after_answer_colon`, the same raw completion
+format the trial pipeline uses. Answer labels A, B, C, D resolved to single tokens
+562, 603, 565, 622.
+
+**Timing on this machine (CPU, machine-specific).**
+
+| Quantity | Value |
+| --- | --- |
+| Model load (one-time) | 48.116 s |
+| Median forward | 0.474158 s |
+| p90 forward | 0.503748 s |
+| Forward min / max | 0.467777 s / 0.503748 s |
+| Tokenization total | 0.001344 s |
+| Representative prompt | 53 tokens |
+| Prefill throughput | 109.98 tokens/s |
+
+**Clean accuracy.** 1 of 1 items correct on the sampled ARC test item. This is a scoring smoke
+check on a single item and is not scientifically informative; it says the scoring path works,
+nothing about capability.
+
+**Memory.** Null. The Windows PSAPI `GetProcessMemoryInfo` call returned failure, so the
+benchmark recorded null with that reason rather than inventing a number.
+
+**Capture verification.** Layer 13, captured shape [1152], dtype float32, hook fired,
+`capture_point_verified: true`, `max_abs_patch_error: 0.0`. The hook-owned capture path reads
+back exactly the point it patched, on real Gemma weights, not only on the fixture.
+
+**Compute estimate.** From the measured median forward, the MVP sweep (2000 prompts, two model
+states, four candidates) is 16000 forwards and about 2.107 CPU hours, classified practical on
+CPU. Full arithmetic and the LoRA caveat are in `docs/compute_decision.md`.
+
+**Provenance.** benchmark.json hash `sha256:e9ac2c28...`, model config hash `sha256:583ac1fa...`,
+task config hash `sha256:97c886ec...`, task manifest hash `sha256:ca8773af...`.
+
+**Phase 2 is now done.** A real pinned Gemma run has succeeded.
+
+## 2026-07-19: real Gemma intervention harness validation (systems measurement, not scientific)
+
+The smallest real-model intervention validation the benchmark timing justifies. It runs the
+intervention and resolution paths on real Gemma weights at layer 13 with a synthetic,
+unvalidated direction (`gemma_synthetic`, a seeded random unit vector). Run
+`gemma-harness`, resolved in ground-truth mode. No model organism, no estimated direction, no
+forecaster. Nothing here is a CSF-Bench scientific result.
+
+`csf interventions validate` on the Gemma config passed every required control on real weights:
+
+| Control | Result |
+| --- | --- |
+| no-op equality | max abs logit diff 0.0, residual delta norm 0.0 |
+| zero-strength equality | max abs logit diff 0.0 |
+| rerun determinism | max abs logit diff 0.0, max abs state diff 0.0 |
+| shape validation | all invalid operands rejected |
+| hook applies intervention | residual delta norm 0.99999, expected 1.0 |
+
+`csf trials resolve --ground-truth` applied all four candidates to one ARC item and recorded
+four observations, zero failures. Measured delta margins (clean margin was 8.5148):
+
+| Role | Mechanism | delta margin | answer flip |
+| --- | --- | --- | --- |
+| noop_control | noop | 0.000000 | no |
+| direction_positive | residual_add +4.0 | -0.005844 | no |
+| direction_negative | residual_add -4.0 | +0.005674 | no |
+| random_control | random_add +4.0 | +0.010585 | no |
+
+Reading these correctly: the no-op reproduces the clean output exactly, which is the point of
+the control. Positive and negative steering move the margin in opposite directions, coherently.
+The magnitudes are tiny because a synthetic random direction at layer 13 barely perturbs a very
+confident margin, and because the direction is not a bias direction and has passed no causal
+validation. These numbers validate the harness end to end on real weights; they say nothing
+about the model, and they are marked non-scientific in the resolution manifest.
 
 ## Next entry
 
-The next entry will be the first real Gemma 3 1B benchmark, once the file host is reachable:
-
-```powershell
-uv run csf benchmark `
-  --model-config configs/models/gemma3_1b_it.yaml `
-  --task-config configs/tasks/arc_mcq.yaml `
-  --split test `
-  --max-items 1 `
-  --warmup-runs 1 `
-  --timed-runs 3
-```
-
-That run measures clean accuracy on a small ARC sample and the CPU cost per forward pass,
-which is what the GPU decision should be made on. Phase 2 stays open until it exists, and no
-compute estimate for Gemma should be quoted before then.
+The next scientific step needs a validated direction and a model organism, both of which are
+out of scope for now. The immediate open work is the remaining baselines (linear state probe,
+state MLP, gradient) and the direction-estimation pipeline. No CSF-Bench scientific result
+exists yet, and none should be reported until a validated direction and a real comparison
+exist.

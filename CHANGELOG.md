@@ -6,6 +6,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+* `csf trials resolve`: apply interventions and record observations for a generated trial run.
+  Forecast mode requires committed forecasts, selects one candidate per trial after commitment,
+  reveals the salt, and verifies the commitment. Ground-truth mode applies every candidate and
+  records observations only. Both refuse to resolve a systems benchmark, refuse to treat a
+  fixture run as scientific, validate commitments before running, guard against a model that
+  does not reproduce the committed clean baseline, and preserve failed interventions with
+  explicit error records rather than dropping them.
+* `csf score run`: match committed forecasts to observations and aggregate. Numeric metrics
+  (MAE, RMSE, sign accuracy, interval coverage), flip metrics (Brier, log loss), and
+  largest-effect candidate ranking, with no-op candidates excluded from the headline and
+  reported separately. Every metric carries its sample count and a group-bootstrapped interval.
+  Scores are written to the run directory only and never become a public result; a scientific
+  run whose commitments did not verify is refused.
+* Two model-organism-free baselines: a constant predictor (training-split averages by public
+  operation, layer, and strength) and a prompt-only lexical model (TF-IDF plus public strength
+  and layer, ridge for delta and logistic for flip). Both are fenced to public information by
+  construction, with a leakage audit test on the training-example type and the forecaster
+  interface.
+* `ComputeEstimate` planning arithmetic and `docs/compute_decision.md`, derived from the
+  measured Gemma forward time. LoRA training on CPU is classified insufficient evidence.
+* `configs/experiments/gemma_smoke.yaml` and its intervention config, for the smallest
+  real-model intervention harness validation.
+
+### Measured (systems, not scientific)
+
+* Real Gemma 3 1B systems benchmark completed on CPU: median forward 0.474 s, model load
+  48.1 s, capture verified at layer 13 with zero patch error. Values in
+  `docs/experiment_log.md`, read from the artifact, classified `systems_benchmark`.
+* Real Gemma intervention harness validation: all required controls pass on real weights, and
+  ground-truth resolution recorded four observations (no-op, positive, negative, random) on one
+  ARC item with the no-op reproducing the clean output exactly. Non-scientific: the direction is
+  synthetic and unvalidated.
+
+### Added (earlier this cycle)
+
 * `csf benchmark`: a systems and clean-model sanity benchmark for a real pretrained model. It
   loads the pinned weights, scores multiple-choice items directly from their answer-token
   logits, measures CPU load and forward-pass cost, reports process memory or an explicit null,

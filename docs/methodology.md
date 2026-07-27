@@ -96,6 +96,38 @@ salts. An edited forecast fails even though its commitment record still looks we
 What this does not do is defend against an experimenter who controls the machine. See
 `claim_boundaries.md`.
 
+## 5a. Resolution
+
+`csf trials resolve` applies interventions and records one `ObservationRecord` per applied
+candidate. It runs in two modes, chosen explicitly because they answer different questions.
+
+Forecast mode requires committed forecasts. It reads or writes a selection seed after the
+commitments exist, selects one candidate per trial deterministically, applies it, reveals the
+salt, and verifies the commitment. This is the blinded protocol: only the selected candidate is
+observed, so a trial cannot contribute a candidate-ranking comparison, and the run can be a
+scientific forecast resolution when its commitments verify.
+
+Ground-truth mode applies every candidate in every trial. It needs no forecasts and does no
+selection or reveal, so it produces the full effect distribution used to train baselines and to
+validate the harness on real weights. It is never a scientific forecast evaluation.
+
+Two safeguards. The clean baseline in each observation is taken from the committed trial record,
+not recomputed, so a delta is always measured against exactly the clean output the forecast
+targeted; a one-time check confirms the resolution model reproduces the committed clean margin,
+catching a model loaded at the wrong precision or revision. And a failed intervention is written
+to a failures record, never silently dropped, because a run missing a biased subset of its
+interventions would report clean-looking numbers over the wrong sample.
+
+## 5b. Scoring
+
+`csf score run` matches each committed forecast candidate to its observation and aggregates per
+method. No-op candidates are excluded from the headline metrics and reported separately, because
+a no-op is a zero-strength addition that every method predicts correctly. Ranking uses only
+trials where every candidate was observed. Uncertainty is bootstrapped by task-item group, and
+every number carries its sample count. Scores are written to the run directory; the scorer never
+writes to the public results tree and refuses to treat a run as scientific unless its
+commitments verified.
+
 ## 6. Forecasting methods
 
 Every method declares what it may read. The declaration is the experiment.

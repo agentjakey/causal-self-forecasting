@@ -133,6 +133,21 @@ def score_logits(
     )
 
 
+def entropy_from_label_logits(label_logits: dict[str, float]) -> float:
+    """Entropy over the four-way label distribution, from stored label logits.
+
+    Used at resolution time to fill an observation's clean entropy from the logits committed
+    at trial generation, without recomputing the clean forward. Matches the four-way
+    convention in `score_logits`: the distribution is renormalized over the labels only, so
+    the entropy is bounded by log of the label count.
+    """
+    if not label_logits:
+        raise ValueError("cannot compute entropy over zero labels")
+    values = torch.tensor(sorted(label_logits.values()), dtype=torch.float64)
+    probs = torch.softmax(values, dim=0)
+    return float(-(probs * torch.log(probs.clamp_min(1e-12))).sum())
+
+
 def target_option_rate(predicted_labels: list[str], target_label: str) -> float:
     """Fraction of predictions equal to a target answer position.
 

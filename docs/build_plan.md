@@ -65,12 +65,12 @@ manifest, not estimated here.
 | --- | --- | --- |
 | 0 | Scientific contract | done |
 | 1 | Repository scaffold | done |
-| 2 | Real-model harness | done on the fixture model, not yet run on Gemma |
-| 3 | Intervention system | done |
-| 4 | Trial and commitment engine | done |
+| 2 | Real-model harness | done, validated on real Gemma 3 1B |
+| 3 | Intervention system | done, validated on real Gemma 3 1B |
+| 4 | Trial and commitment engine | done, resolution and scoring included |
 | 5 | Benign model organism | not started |
 | 6 | Direction discovery | not started |
-| 7 | Baselines | not started |
+| 7 | Baselines | partial: constant and prompt-only lexical done |
 | 8 | State-conditioned forecaster | not started |
 | 9 | Held-out mechanism test | not started |
 | 10 | Dashboard | not started |
@@ -128,8 +128,11 @@ closes it.
 - [x] Clean-rerun determinism check with a stated numerical tolerance
 - [x] `csf benchmark`: a systems and clean-model sanity benchmark, classified non-scientific,
       with access classification, CPU timing, memory, and capture verification on real weights
-- [ ] Load Gemma 3 1B and measure clean accuracy on ARC
-- [ ] Measure the CPU cost of one forward pass, to decide the GPU question with data
+- [x] Load Gemma 3 1B and measure clean accuracy on ARC (1 item, scoring smoke check only)
+- [x] Measure the CPU cost of one forward pass (median 0.474 s), see `docs/compute_decision.md`
+
+Phase 2 is done. The systems benchmark ran on real Gemma 3 1B and the intervention harness
+was validated on real weights (see `docs/experiment_log.md`, 2026-07-18 and 2026-07-19).
 
 ### The systems benchmark
 
@@ -176,22 +179,47 @@ independently verified.
 - [x] Selection seed accepted only after a commitment exists
 - [x] Deterministic selection from seed
 - [x] `csf verify run` recomputing every commitment from revealed salts
-- [ ] `csf trials resolve`: apply the selected intervention and write observations. Blocked on
-      nothing technical; it is the next thing to build, and it needs a forecaster to produce
-      forecasts worth resolving.
+- [x] `csf trials resolve`: apply interventions and write observations, in two modes. Forecast
+      mode requires committed forecasts, selects one candidate per trial after commitment,
+      reveals and verifies. Ground-truth mode applies every candidate for training data and
+      harness validation. Both refuse benchmark runs, refuse fixture runs as scientific, and
+      preserve failed interventions with explicit error records.
+- [x] `csf score run`: match committed forecasts to observations, headline metrics excluding
+      no-ops, all-candidate metrics separately, grouped bootstrap intervals, exclusions
+      reported. Never writes a public result.
+
+Phase 4 is done. The full generate to score pipeline runs end to end on the fixture in the
+test suite, and the resolution and intervention paths are validated on real Gemma 3 1B.
+
+## Phase 7: Baselines (partial)
+
+Definition of done for the two model-organism-free baselines: both use the same data splits
+and scoring interface, and neither can see hidden states, adapter identity, private vectors,
+outcomes from the predicted split, or the correct answer.
+
+- [x] Constant baseline: training-split averages by public operation, layer, and strength. It
+      cannot separate a real steer from a matched random control, by design, because they share
+      a public group.
+- [x] Prompt-only lexical baseline: TF-IDF of the prompt plus public strength and layer, ridge
+      for delta and logistic for flip. Fenced to prompt and public metadata only.
+- [x] Leakage audit test: `TrainingExample` is asserted to carry no private field, and the
+      forecaster interface rejects a declared forbidden input.
+- [ ] Prompt-only target-model report, linear state probe, state MLP, gradient baseline. Not
+      started; the state methods wait on the state-conditioning work in Phase 8.
 
 ## Phase 5 onward
 
-Phase 5 is where the missing CUDA device starts to bind. The decision about renting a GPU gets
-made against a measured CPU cost from the first real Gemma run, not against a guess, which is
-why that measurement is listed under Phase 2 rather than assumed here.
+Phase 5 is where the missing CUDA device starts to bind. LoRA training on CPU is classified
+insufficient evidence in `docs/compute_decision.md`; a timed micro-run is needed before it is
+treated as practical, and GPU rental should be considered there. The compute decision is the
+maintainer's.
 
 Order from here:
 
-1. Gemma 3 1B load and answer scoring (finishes Phase 2).
-2. `csf trials resolve` and the scoring module (finishes Phase 4).
-3. Constant and prompt-only baselines, which need no organism and no direction, so they can be
-   scored end to end on real trials before Phase 5 starts.
+1. Direction estimation with causal validation (Phase 6). The current directions are synthetic
+   and unvalidated; a real experiment needs an estimated, causally validated direction.
+2. Benign model organism (Phase 5), which needs the LoRA training decision above.
+3. The remaining baselines and the state-conditioned forecaster (Phases 7 and 8).
 4. Benign model organism (Phase 5).
 5. Direction estimation with causal validation (Phase 6).
 

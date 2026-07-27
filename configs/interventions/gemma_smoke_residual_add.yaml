@@ -1,0 +1,14 @@
+# Residual addition sized for Gemma 3 1B (26 blocks), for harness validation only.
+#
+# Separate from residual_add.yaml so the strength here can be small and the layer single,
+# matching the smallest real-model intervention validation rather than a full sweep. Layer 13
+# is the middle of the residual stream and matches the benchmark's capture layer.
+#
+# The direction used with this is synthetic and unvalidated. Nothing produced here is a
+# scientific result.
+name: gemma_smoke_residual_add
+mechanism: residual_add
+mechanism_version: "1.0"
+layers: [13]
+positions: [-1]
+strengths: [4.0]

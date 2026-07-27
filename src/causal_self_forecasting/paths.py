@@ -17,7 +17,15 @@ FORECASTS = "forecasts.jsonl"
 FORECAST_COMMITMENTS = "forecast_commitments.jsonl"
 SELECTION_REVEALS = "selection_reveals.jsonl"
 OBSERVATIONS = "observations.parquet"
+# Observations are written as JSONL, not parquet. Every other record in a run is JSONL, the
+# volume is small, and a hashable line-oriented file needs none of the pandas machinery a
+# parquet writer would pull in. The parquet name is kept above only as the documented long
+# term target; nothing writes it yet.
+OBSERVATION_RECORDS = "observations.jsonl"
+RESOLUTION_FAILURES = "resolution_failures.jsonl"
+RESOLUTION_MANIFEST = "resolution.json"
 SCORES = "scores.json"
+SCORE_RECORDS = "score_records.jsonl"
 RUN_MANIFEST = "run_manifest.json"
 ENVIRONMENT = "environment.json"
 ARTIFACT_HASHES = "artifact_hashes.json"

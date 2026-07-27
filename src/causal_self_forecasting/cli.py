@@ -42,12 +42,14 @@ directions_app = typer.Typer(
 )
 interventions_app = typer.Typer(help="Validate the intervention harness.", no_args_is_help=True)
 trials_app = typer.Typer(help="Generate and resolve trials.", no_args_is_help=True)
+score_app = typer.Typer(help="Score resolved runs.", no_args_is_help=True)
 verify_app = typer.Typer(help="Verify run artifacts.", no_args_is_help=True)
 
 app.add_typer(data_app, name="data")
 app.add_typer(directions_app, name="directions")
 app.add_typer(interventions_app, name="interventions")
 app.add_typer(trials_app, name="trials")
+app.add_typer(score_app, name="score")
 app.add_typer(verify_app, name="verify")
 
 
@@ -365,6 +367,82 @@ def trials_generate(
     info("starting run", run_id=identifier, config=str(config))
 
     _echo_json(generate_trials(resolved, run_id=identifier, max_trials=max_trials))
+
+
+@trials_app.command("resolve")
+def trials_resolve(
+    run_id: str = typer.Option(..., "--run-id", help="Generated trial run to resolve."),
+    selection_seed_file: Path | None = typer.Option(
+        None,
+        "--selection-seed-file",
+        help="Read the selection seed from this file. Generated after commitment if omitted.",
+    ),
+    ground_truth: bool = typer.Option(
+        False,
+        "--ground-truth",
+        help="Apply every candidate and record observations without a forecaster or scoring.",
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Re-resolve even if observations already exist."
+    ),
+) -> None:
+    """Apply interventions and record observations for a generated trial run.
+
+    Forecast mode (default) requires committed forecasts, selects one candidate per trial
+    after commitment, applies it, and reveals and verifies the commitment. Ground-truth mode
+    applies every candidate and records observations only, which is what trains baselines and
+    validates the harness on real weights. Neither produces a scientific result.
+    """
+    from .trials.resolve import ResolutionError, resolve_run
+
+    directory = run_dir(run_id)
+    if not directory.exists():
+        typer.secho(f"no such run: {directory}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    configure_logging("INFO", log_file=directory / RUN_LOG)
+
+    try:
+        report = resolve_run(
+            run_id,
+            selection_seed_file=selection_seed_file,
+            ground_truth=ground_truth,
+            force=force,
+        )
+    except ResolutionError as error:
+        typer.secho(f"resolution failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+
+    if report["counts"]["failures"]:
+        typer.secho(
+            f"{report['counts']['failures']} interventions failed and were recorded in "
+            "resolution_failures.jsonl",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+
+
+@score_app.command("run")
+def score_run_command(
+    run_id: str = typer.Option(..., "--run-id", help="Resolved run to score."),
+    force: bool = typer.Option(False, "--force", help="Rescore even if scores already exist."),
+) -> None:
+    """Score committed forecasts in a resolved run against its observations.
+
+    Headline metrics exclude no-op candidates; the no-op-inclusive numbers are reported
+    separately. Every metric carries its sample count and a group-bootstrapped interval.
+    Scores are written to the run directory and are never a public result.
+    """
+    from .scoring import ScoringError, score_run
+
+    try:
+        report = score_run(run_id, force=force)
+    except ScoringError as error:
+        typer.secho(f"scoring failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
 
 
 @verify_app.command("run")

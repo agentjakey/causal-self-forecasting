@@ -8,13 +8,19 @@ Working name: **Causal Self-Forecasting Lab**. Benchmark: **CSF-Bench**.
 
 ## Status
 
-**No experimental results exist.** The pipeline runs end to end on a tiny fixture model. No
-experiment has been run on a real language model: there is no model organism, no estimated
-direction, no trained forecaster, and no verified export.
+**No CSF-Bench scientific result exists.** There is no model organism, no estimated and
+validated direction, no trained state-conditioned forecaster, and no verified public export.
 
-Nothing in this repository should be read as a finding about language models. See
-`docs/experiment_log.md` for what has actually been measured, which is harness controls and
-plumbing.
+The pipeline runs end to end: on the fixture model in the test suite, and on real Gemma 3 1B
+for systems and harness validation. What has been measured on real weights is a systems
+benchmark (load time, forward cost, capture correctness) and an intervention harness validation
+(no-op equality, sign reversal, four observed candidates on one item). Both are explicitly
+non-scientific: the directions used are synthetic and unvalidated, and single-item accuracy is
+a scoring smoke check, not a capability measurement.
+
+Nothing in this repository should be read as a finding about how language models reason. See
+`docs/experiment_log.md` for exactly what has been measured and `docs/compute_decision.md` for
+what the measured forward cost implies.
 
 ## The idea
 
@@ -70,10 +76,37 @@ uv run csf data prepare --config configs/tasks/arc_mcq.yaml --max-items 20
 uv run csf directions synthetic --config configs/experiments/smoke.yaml
 uv run csf interventions validate --config configs/experiments/smoke.yaml
 uv run csf trials generate --config configs/experiments/smoke.yaml --max-trials 8
+
+# Apply interventions and record observations (ground-truth mode, all candidates)
+uv run csf trials resolve --run-id <RUN_ID> --ground-truth
+
+# Score committed forecasts against observations
+uv run csf score run --run-id <RUN_ID>
 ```
 
 `csf doctor` reports the environment and validates every config. It does not fail because a
 GPU is missing; it says so.
+
+### Resolution and scoring
+
+`csf trials resolve` has two modes. Forecast mode (the default) requires committed forecasts,
+selects one candidate per trial after commitment, applies it, and reveals and verifies the
+commitment. Ground-truth mode (`--ground-truth`) applies every candidate and records
+observations only, which is what trains the baselines and validates the harness on real
+weights. Neither mode produces a scientific result, and both refuse to resolve a systems
+benchmark or to treat a fixture run as scientific.
+
+`csf score run` matches committed forecasts to observations. No-op candidates are excluded from
+the headline metrics and reported separately, every metric carries its sample count and a
+group-bootstrapped interval, and scores are written to the run directory only, never to the
+public results tree. It refuses to score a scientific run whose commitments did not verify.
+
+The two baselines that need no model organism live in `csf`'s forecasting module: a constant
+predictor (training-split averages by public operation, layer, and strength) and a prompt-only
+lexical model (TF-IDF of the prompt plus public strength and layer). Both are fenced to public
+information: neither can see a hidden state, an adapter identity, a private direction, a correct
+answer, or an outcome from the split it will be scored on. That fence is what makes the
+same-prompt state-swap comparison meaningful, and it is checked by a leakage audit test.
 
 ### The fixture model
 

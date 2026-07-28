@@ -21,6 +21,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from . import SCHEMA_VERSION
+from .hashing import hash_object
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 _HASH_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -112,6 +113,22 @@ class ResultStatus(StrEnum):
     REPLICATED = "replicated"
 
 
+class PromptRole(StrEnum):
+    """Which part of the BlueDot state-dependence arm a prompt belongs to.
+
+    Deliberately separate from `Split`. `Split` carries the preregistered train/val/test policy
+    of the original CSF-Bench study and is cited by `ScoreRecord` and by
+    `docs/preregistration.md` section 7; redefining it to carry a second, unrelated partition
+    would silently change what every existing artifact means. A prompt therefore has both: a
+    `Split` inherited from the task pipeline, and a `PromptRole` assigned by the study manifest.
+    """
+
+    SMOKE = "smoke"
+    CALIBRATION = "calibration"
+    TRAINING = "training"
+    FINAL_TEST = "final_test"
+
+
 # ---------------------------------------------------------------------------
 # Models and tasks
 # ---------------------------------------------------------------------------
@@ -191,6 +208,166 @@ class PromptVariant(Versioned):
     prompt_text: str
     answer_labels: list[str] = Field(min_length=4, max_length=4)
     split: Split
+
+
+# ---------------------------------------------------------------------------
+# Prompt manifests
+#
+# A prompt manifest is a frozen split. It says which prompts play which role in the BlueDot
+# state-dependence arm, and it is written once, before any state is captured. Everything about
+# it is arranged so that a reader can check it rather than trust it: the selection is a pure
+# function of the master seed and the group ids, the assignments are ordered, and the record
+# carries a content hash that the validator recomputes on load. An edited manifest does not
+# parse.
+# ---------------------------------------------------------------------------
+
+
+# Fields covered by the manifest content hash. Everything outside this tuple is provenance or
+# creation metadata: useful to record, but not part of what the manifest *is*. In particular
+# `task_manifest_path` is excluded because it is a filesystem location, and a manifest that
+# hashed differently after the repository moved would be worse than useless.
+PROMPT_MANIFEST_HASHED_FIELDS = (
+    "schema_version",
+    "manifest_id",
+    "task_name",
+    "canonical_wrapper_id",
+    "master_seed",
+    "selection_algorithm",
+    "selection_algorithm_version",
+    "task_manifest_hash",
+    "items_hash",
+    "variants_hash",
+    "eligible_group_count",
+    "role_counts",
+    "assignments",
+)
+
+
+def prompt_manifest_payload(dumped: dict[str, Any]) -> dict[str, Any]:
+    """The exact object a manifest hash covers, taken from a JSON-mode model dump."""
+    missing = [name for name in PROMPT_MANIFEST_HASHED_FIELDS if name not in dumped]
+    if missing:
+        raise ValueError(f"prompt manifest dump is missing hashed fields: {missing}")
+    return {name: dumped[name] for name in PROMPT_MANIFEST_HASHED_FIELDS}
+
+
+def compute_prompt_manifest_hash(dumped: dict[str, Any]) -> str:
+    return hash_object(prompt_manifest_payload(dumped))
+
+
+class PromptAssignment(Base):
+    """One prompt and the role it plays.
+
+    `selection_index` is the prompt's position in the seeded permutation the roles were cut
+    from. It duplicates the list position on purpose: reordering the list without renumbering
+    changes the manifest hash and fails validation, so the ordering is evidence rather than
+    presentation.
+    """
+
+    selection_index: int = Field(ge=0)
+    variant_id: Identifier
+    item_id: Identifier
+    group_id: Identifier
+    role: PromptRole
+    wrapper_id: Identifier
+    split: Split
+    prompt_hash: HashString
+
+
+class PromptManifest(Versioned):
+    """A frozen, hashed, role-labeled prompt set.
+
+    The validator is the point of the type. It recomputes the content hash, checks that the
+    declared role counts match the assignments, checks that the ordering is intact, and checks
+    that no group or item appears under two roles. A manifest that fails any of those does not
+    load, so a downstream run cannot quietly use a tampered split.
+    """
+
+    manifest_id: Identifier
+    task_name: str
+    canonical_wrapper_id: Identifier
+    master_seed: int
+    selection_algorithm: str
+    selection_algorithm_version: str
+    # Computed over the portable fields of the task manifest, excluding its path fields. See
+    # `tasks.prompt_manifest.task_manifest_hash` for exactly what goes in.
+    task_manifest_hash: HashString
+    items_hash: HashString
+    variants_hash: HashString
+    eligible_group_count: int = Field(gt=0)
+    role_counts: dict[str, int]
+    assignments: list[PromptAssignment] = Field(min_length=1)
+    manifest_hash: HashString
+    # Provenance and creation metadata. Deliberately outside the hashed payload.
+    task_manifest_path: str
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _check_manifest(self) -> PromptManifest:
+        known_roles = {role.value for role in PromptRole}
+        unknown = sorted(set(self.role_counts) - known_roles)
+        if unknown:
+            raise ValueError(f"role_counts names roles that do not exist: {unknown}")
+        if any(count <= 0 for count in self.role_counts.values()):
+            raise ValueError("every declared role count must be positive")
+
+        observed: dict[str, int] = {}
+        for assignment in self.assignments:
+            observed[assignment.role.value] = observed.get(assignment.role.value, 0) + 1
+        if observed != dict(self.role_counts):
+            raise ValueError(
+                f"role_counts {dict(sorted(self.role_counts.items()))} does not match the "
+                f"assignments {dict(sorted(observed.items()))}"
+            )
+        if sum(self.role_counts.values()) != len(self.assignments):
+            raise ValueError("role counts do not sum to the number of assignments")
+
+        if [a.selection_index for a in self.assignments] != list(range(len(self.assignments))):
+            raise ValueError(
+                "assignments must be stored in selection order with contiguous "
+                "selection_index values starting at 0"
+            )
+
+        for field_name, values in (
+            ("variant_id", [a.variant_id for a in self.assignments]),
+            ("group_id", [a.group_id for a in self.assignments]),
+            ("item_id", [a.item_id for a in self.assignments]),
+        ):
+            if len(set(values)) != len(values):
+                duplicates = sorted({v for v in values if values.count(v) > 1})
+                raise ValueError(
+                    f"a prompt manifest must be disjoint by {field_name}; these appear under "
+                    f"more than one assignment: {duplicates[:5]}"
+                )
+
+        wrong_wrapper = sorted(
+            {a.wrapper_id for a in self.assignments if a.wrapper_id != self.canonical_wrapper_id}
+        )
+        if wrong_wrapper:
+            raise ValueError(
+                f"every assignment must use the canonical wrapper "
+                f"{self.canonical_wrapper_id!r}; found {wrong_wrapper}"
+            )
+
+        if len(self.assignments) > self.eligible_group_count:
+            raise ValueError(
+                f"{len(self.assignments)} assignments cannot come from an eligible pool of "
+                f"{self.eligible_group_count} groups"
+            )
+
+        recomputed = compute_prompt_manifest_hash(self.model_dump(mode="json"))
+        if recomputed != self.manifest_hash:
+            raise ValueError(
+                f"manifest_hash {self.manifest_hash} does not match the manifest contents "
+                f"({recomputed}); the file has been edited since it was written"
+            )
+        return self
+
+    def by_role(self, role: PromptRole) -> list[PromptAssignment]:
+        return [assignment for assignment in self.assignments if assignment.role is role]
+
+    def group_ids(self, role: PromptRole) -> set[str]:
+        return {assignment.group_id for assignment in self.by_role(role)}
 
 
 # ---------------------------------------------------------------------------

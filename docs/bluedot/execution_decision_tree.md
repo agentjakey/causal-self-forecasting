@@ -62,13 +62,19 @@ writing code. A decision made during implementation is a researcher degree of fr
 
 ## G1. Prompt manifest
 
-**Prerequisite that is not compute:** the prepared ARC dataset currently holds 20 items and 160
-variants (`data/manifests/arc_mcq.json`). The arm needs at least 168 eligible groups.
-`csf data prepare --config configs/tasks/arc_mcq.yaml` must be rerun at a higher `--max-items`.
-That requires network access to `allenai/ai2_arc` and cannot run under `HF_HUB_OFFLINE=1`.
+**Status: passed, 2026-07-27.** Values are in `docs/experiment_log.md`; the frozen split is
+`data/prompt_manifests/bluedot_state_dependence_v1.json`, manifest hash
+`sha256:bf351c9d73042fcb3d0cdcb18247ded3411413d73000e047f1ba6ba9ab5b25b9`, drawn from an
+eligible pool of 256 groups.
 
-**Work:** `PromptRole` enum, `PromptManifest` record, deterministic role assignment from
-`derive_seed("bluedot.prompt_manifest", 20260727)`, `csf prompts manifest`.
+**Prerequisite that is not compute:** satisfied. The ARC pool was re-prepared and now holds 256
+items, 256 groups, and 2,048 variants. `csf data prepare` needs network access to
+`allenai/ai2_arc` and cannot run under `HF_HUB_OFFLINE=1`, so it is done once, outside the
+offline pipeline.
+
+**Work:** `PromptRole` enum, `PromptManifest` and `PromptAssignment` records, deterministic role
+assignment from `derive_seed("bluedot.prompt_manifest", 20260727, group_id)`,
+`csf prompts manifest`, and `csf prompts verify`.
 
 **No model is loaded at this stage.**
 
@@ -82,6 +88,11 @@ That requires network access to `allenai/ai2_arc` and cannot run under `HF_HUB_O
 | Determinism | building twice from the same task and seed is byte-identical |
 | Provenance | the manifest cites the task manifest hash |
 | Independence | assignment is a function of `group_id` and the seed only, asserted by test |
+
+All six passed. 256 eligible groups against 168 required; counts 8 / 32 / 96 / 32; no group id
+and no item id shared between any two roles; the deterministic payload is byte-identical across
+rebuilds and a rerun leaves the file untouched; the manifest cites the task manifest, items, and
+variants hashes and `csf prompts verify` confirms they still match.
 
 **Fail branch:** if the pool is short, **STOP-B**. Report the shortfall. Do not shrink a role,
 reuse a group, or relax disjointness.

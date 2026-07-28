@@ -49,6 +49,22 @@ deferred out of this arm's path; they remain part of the broader roadmap in
 
 No calibration, training, or final-test run has been executed and no result exists.
 
+The arm's first slice is done: the prompt split is frozen at
+`data/prompt_manifests/bluedot_state_dependence_v1.json`, 168 prompts on the `neutral_a` wrapper
+drawn deterministically from 256 eligible ARC groups at seed 20260727, disjoint by group and by
+item across all four roles. Building it loads no model and runs no forward pass:
+
+```powershell
+uv run csf prompts manifest --config configs/prompts/bluedot_state_dependence.yaml
+uv run csf prompts verify --manifest-id bluedot_state_dependence_v1
+```
+
+Selection is a pure function of the master seed and the group ids. It never reads model
+correctness, confidence, logits, hidden states, or any outcome, so the split cannot be chosen to
+suit a result. Rerunning leaves an identical manifest byte-identical rather than rewriting it,
+and a manifest that differs is refused unless `--force` is passed. Committing the manifest is
+what freezes the split; see `docs/experiment_log.md` for the hashes.
+
 ## The idea
 
 A model can explain its answer persuasively without the explanation tracking the computation
@@ -98,6 +114,10 @@ uv run pytest -q
 
 # Real ARC data
 uv run csf data prepare --config configs/tasks/arc_mcq.yaml --max-items 20
+
+# Freeze the BlueDot prompt split (offline, no model, no forward pass)
+uv run csf prompts manifest --config configs/prompts/bluedot_state_dependence.yaml
+uv run csf prompts verify --manifest-id bluedot_state_dependence_v1
 
 # Smoke pipeline on the fixture model, offline
 uv run csf directions synthetic --config configs/experiments/smoke.yaml

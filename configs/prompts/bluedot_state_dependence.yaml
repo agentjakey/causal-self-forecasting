@@ -1,0 +1,27 @@
+# Frozen prompt split for the BlueDot state-dependence arm.
+#
+# Every value here is preregistered in docs/bluedot/preregistration_state_dependence.md
+# section 4. Changing any of them changes the manifest hash and therefore the split, so a
+# change is an amendment to that document and must be recorded in its amendment log.
+#
+# Nothing in this config references a model, an intervention, or a direction. Building the
+# manifest loads no weights and runs no forward pass.
+name: bluedot_state_dependence
+manifest_id: bluedot_state_dependence_v1
+
+task_ref: configs/tasks/arc_mcq.yaml
+
+# One canonical neutral prompt per group. The evaluation and deployment framings are not used
+# in this arm, and the held-out paraphrases stay reserved for the unseen-phrasing test.
+canonical_wrapper_id: neutral_a
+
+# The master study seed. Every seeded step in this arm derives from it through
+# reproducibility.derive_seed with its own purpose label, so changing one step cannot shift
+# another.
+master_seed: 20260727
+
+role_counts:
+  smoke: 8
+  calibration: 32
+  training: 96
+  final_test: 32

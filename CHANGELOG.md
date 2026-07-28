@@ -4,6 +4,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added (2026-07-27, BlueDot slice B1: deterministic prompt manifests)
+
+* `PromptRole` (`smoke`, `calibration`, `training`, `final_test`), plus the `PromptAssignment`
+  and `PromptManifest` records. `PromptRole` is additive: the existing `Split` enum and
+  `tasks/splitting.py` are untouched, and a prompt now carries both. `PromptManifest` recomputes
+  its own content hash on load, so an edited, reordered, or recounted manifest fails to parse.
+  The hash deliberately excludes the manifest's filesystem path and creation timestamp, so the
+  same selection hashes the same after the repository moves.
+* `tasks/prompt_manifest.py`: deterministic role assignment as a pure function of the master
+  seed and the group ids, through the existing `derive_seed` with the label
+  `bluedot.prompt_manifest`, over a lexicographically sorted pool with the group id as
+  tie-break. Selection never reads model correctness, confidence, logits, hidden states,
+  intervention effects, gold-label balance, question topic, or input file order. It refuses a
+  pool that is too small, a group with no or more than one canonical variant, duplicate group or
+  item ids, a wrapper the task does not define, a held-out wrapper, and a manifest whose task
+  artifacts have moved.
+* `csf prompts manifest` and `csf prompts verify`. Rerunning `manifest` with identical inputs
+  leaves an identical file byte-identical and reports `unchanged` rather than rewriting it, and
+  a different manifest at the same path is refused unless `--force` is passed.
+* `PromptManifestConfig` and `configs/prompts/bluedot_state_dependence.yaml`, carrying the
+  preregistered defaults. `csf doctor` now validates `configs/prompts` as well.
+* `paths.prompt_manifests_dir` and `paths.prompt_manifest_path`, so the output location is owned
+  in one place.
+* 53 offline tests covering counts, coverage, group and item disjointness, determinism,
+  selection blindness, every named failure mode, atomic write behavior, overwrite refusal,
+  schema round-trip, tamper evidence, and the CLI.
+
+### Measured (infrastructure, not scientific)
+
+* The BlueDot prompt split was frozen to
+  `data/prompt_manifests/bluedot_state_dependence_v1.json`, manifest hash
+  `sha256:bf351c9d73042fcb3d0cdcb18247ded3411413d73000e047f1ba6ba9ab5b25b9`: 168 prompts, all on
+  wrapper `neutral_a`, drawn from 256 eligible groups at seed 20260727. No model was loaded and
+  no forward pass ran. Values and disjointness evidence are in `docs/experiment_log.md`.
+
 ### Added (2026-07-27, documentation and scope only)
 
 * `docs/bluedot/current_state_audit.md`: a read-first audit of the checkout, recording verified

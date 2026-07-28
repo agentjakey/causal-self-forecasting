@@ -226,7 +226,7 @@ baselines, and it defers Phases 5, 6, and 8 through 13.
 | Slice | Deliverable | Status |
 | --- | --- | --- |
 | B0 | Preregistration and scope amendment | done, 2026-07-27 |
-| B1 | Prompt manifests: `PromptRole`, `PromptManifest`, `csf prompts manifest` | not started |
+| B1 | Prompt manifests: `PromptRole`, `PromptManifest`, `csf prompts manifest` | **done, 2026-07-27**; split frozen at `data/prompt_manifests/bluedot_state_dependence_v1.json` |
 | B2 | Direction bank and the fixed intervention projection matrix | not started |
 | B3 | Global state-relative-by-calibration strength and `norm_ratio` | not started |
 | B4 | 17-candidate and 81-candidate study candidate sets | not started |

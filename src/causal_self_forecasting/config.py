@@ -14,7 +14,7 @@ import yaml
 from pydantic import ConfigDict, Field, model_validator
 
 from .hashing import hash_object
-from .schemas import Base, Framing, Mechanism, Split
+from .schemas import Base, Framing, Mechanism, PromptRole, Split
 
 
 def repo_root() -> Path:
@@ -119,6 +119,40 @@ class TaskConfig(Base):
                 "the evaluation and deployment comparison needs all three"
             )
         return self
+
+
+class PromptManifestConfig(Base):
+    """How to freeze a role-labeled prompt set.
+
+    Separate from `ExperimentConfig` because it references no model, no intervention grid, and
+    no direction: building a manifest loads no weights and runs no forward pass. Folding it
+    into the experiment config would make a config that cannot be satisfied without a model
+    stand in front of a step that does not need one.
+    """
+
+    name: str
+    manifest_id: str
+    task_ref: str
+    canonical_wrapper_id: str
+    master_seed: int
+    role_counts: dict[PromptRole, int] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _check_role_counts(self) -> PromptManifestConfig:
+        missing = sorted(role.value for role in PromptRole if role not in self.role_counts)
+        if missing:
+            raise ValueError(
+                f"role_counts must name every prompt role; missing {missing}. A role omitted "
+                "here would be silently absent from the frozen split."
+            )
+        bad = sorted(role.value for role, count in self.role_counts.items() if count <= 0)
+        if bad:
+            raise ValueError(f"these roles have a non-positive count: {bad}")
+        return self
+
+    @property
+    def total_prompts(self) -> int:
+        return sum(self.role_counts.values())
 
 
 class InterventionConfig(Base):

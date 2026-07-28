@@ -49,6 +49,20 @@ def manifests_dir() -> Path:
     return data_dir() / "manifests"
 
 
+def prompt_manifests_dir() -> Path:
+    """Where frozen prompt-role manifests live.
+
+    Kept beside the task manifests and outside the git-ignored `data/` subdirectories, because
+    a prompt manifest is a frozen split. Committing it is what freezes it, and a split that
+    only exists on one machine is not a preregistered split.
+    """
+    return data_dir() / "prompt_manifests"
+
+
+def prompt_manifest_path(manifest_id: str) -> Path:
+    return prompt_manifests_dir() / f"{manifest_id}.json"
+
+
 def artifacts_dir() -> Path:
     return repo_root() / "artifacts"
 

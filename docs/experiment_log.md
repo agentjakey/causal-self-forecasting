@@ -263,12 +263,63 @@ deliberately not repeated here, so that this log cannot be misread as containing
 Offline suite after the documentation changes: **273 passed, 1 skipped**; ruff, ruff format, and
 pyright clean.
 
+## 2026-07-27: BlueDot prompt manifest frozen (infrastructure and split freezing, not a result)
+
+**This entry records infrastructure and a split freeze. It is not a scientific result.** No model
+was loaded, no forward pass ran, no state was captured, and no intervention was applied. The
+command that produced it reads prepared task files and writes one JSON artifact.
+
+The ARC pool was re-prepared before this step and now holds 256 items, 256 groups, and 2,048
+variants (`data/manifests/arc_mcq.json`).
+
+Command:
+
+```powershell
+uv run csf prompts manifest --config configs/prompts/bluedot_state_dependence.yaml
+```
+
+Values below are read from the written artifact, not typed from memory.
+
+| Field | Value |
+| --- | --- |
+| Manifest | `data/prompt_manifests/bluedot_state_dependence_v1.json` |
+| Manifest hash | `sha256:bf351c9d73042fcb3d0cdcb18247ded3411413d73000e047f1ba6ba9ab5b25b9` |
+| Task manifest hash | `sha256:51ef4ce76eb3dd5d8616ef09ad376c9bda859934edc19676485ea8cfb5edc983` |
+| Items hash | `sha256:08581f187b6095b1bffba47d9f33cd07c085c9348a3544d17f49d31adfa17070` |
+| Variants hash | `sha256:ccbae819f1b1e1d910b3d31b60b2ae40e379d90755e9d672c22a39b4523b8ba3` |
+| Master seed | 20260727 |
+| Canonical wrapper | `neutral_a` |
+| Selection algorithm | `seeded_group_permutation_contiguous_roles` v1.0 |
+| Eligible groups | 256 |
+| Role counts | smoke 8, calibration 32, training 96, final_test 32 |
+| Total prompts | 168 |
+
+Checked against the written file: 168 assignments, 168 distinct variant ids, 168 distinct group
+ids, 168 distinct item ids, every assignment on wrapper `neutral_a`, all four roles pairwise
+disjoint by both group id and item id, and `selection_index` contiguous from 0.
+
+Rerunning the command left the file byte-identical and reported `status: unchanged` rather than
+rewriting it. `csf prompts verify --manifest-id bluedot_state_dependence_v1` reports `valid:
+true` with no mismatches.
+
+Selection is a pure function of the master seed and the group ids, computed through the existing
+`derive_seed` with the label `bluedot.prompt_manifest`, over a lexicographically sorted pool. It
+does not read model correctness, confidence, label logits, hidden states, intervention effects,
+calibration outcomes, gold-label balance, question topic, or input file order. Each of the three
+non-smoke roles drew prompts from all three of the task pipeline's `Split` values, which is what
+a selection blind to those properties looks like.
+
+The existing `Split` enum and `tasks/splitting.py` are unchanged. `PromptRole` is additive, and a
+prompt now carries both.
+
+Suite after this slice: **326 passed, 1 skipped** (273 before, 53 added). Ruff, ruff format,
+pyright, and `csf doctor` clean.
+
 ## Next entry
 
-The next step is implementation slice B1 in `docs/build_plan.md`: prompt manifests. It needs no
-model. The one prerequisite that is not compute is rerunning `csf data prepare` at a higher
-`--max-items`, because the prepared dataset holds 20 items and the arm needs at least 168
-eligible groups; that requires network access.
+The next step is implementation slice B2 in `docs/build_plan.md`: the direction bank and the
+fixed intervention projection matrix. It loads the pinned model to read the unembedding rows but
+scores no prompt and captures no state.
 
 No CSF-Bench scientific result exists yet, and none should be reported until a real comparison
 has been run and verified.

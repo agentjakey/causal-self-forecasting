@@ -37,6 +37,7 @@ app = typer.Typer(
     add_completion=False,
 )
 data_app = typer.Typer(help="Prepare task datasets.", no_args_is_help=True)
+prompts_app = typer.Typer(help="Freeze and inspect prompt-role manifests.", no_args_is_help=True)
 directions_app = typer.Typer(
     help="Create and inspect intervention directions.", no_args_is_help=True
 )
@@ -46,6 +47,7 @@ score_app = typer.Typer(help="Score resolved runs.", no_args_is_help=True)
 verify_app = typer.Typer(help="Verify run artifacts.", no_args_is_help=True)
 
 app.add_typer(data_app, name="data")
+app.add_typer(prompts_app, name="prompts")
 app.add_typer(directions_app, name="directions")
 app.add_typer(interventions_app, name="interventions")
 app.add_typer(trials_app, name="trials")
@@ -88,14 +90,15 @@ def doctor() -> None:
         "devices": available_devices(),
     }
 
+    from .config import InterventionConfig, PromptManifestConfig
+
     config_types: list[tuple[str, type]] = [
         ("configs/models", ModelConfig),
         ("configs/tasks", TaskConfig),
         ("configs/experiments", ExperimentConfig),
+        ("configs/interventions", InterventionConfig),
+        ("configs/prompts", PromptManifestConfig),
     ]
-    from .config import InterventionConfig
-
-    config_types.append(("configs/interventions", InterventionConfig))
 
     results: dict[str, Any] = {}
     failures: list[str] = []
@@ -156,6 +159,82 @@ def data_prepare(
 
     manifest = prepare_task(task_config, str(config), max_items=max_items)
     _echo_json(manifest)
+
+
+@prompts_app.command("manifest")
+def prompts_manifest(
+    config: Path = typer.Option(..., "--config", help="Path to a prompt-manifest config."),
+    seed: int | None = typer.Option(
+        None, "--seed", help="Override the master seed. Changes the split, and the hash."
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Replace an existing, different manifest at the same path."
+    ),
+) -> None:
+    """Freeze a deterministic, role-labeled prompt split.
+
+    Selection is a pure function of the master seed and the group ids. It never looks at model
+    correctness, confidence, logits, hidden states, or any outcome, so the split cannot be
+    chosen to suit a result. No model is loaded and no forward pass runs.
+
+    Rerunning with identical inputs leaves an identical manifest untouched rather than
+    rewriting it, so the file on disk stays byte-identical. A manifest that differs is refused
+    unless force is passed, because a frozen split must not be replaced silently.
+    """
+    from .tasks.prompt_manifest import PromptManifestError, generate_prompt_manifest
+
+    try:
+        report = generate_prompt_manifest(config, master_seed=seed, force=force)
+    except PromptManifestError as error:
+        typer.secho(f"prompt manifest failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+
+    if not report["task_artifacts_match"]:
+        typer.secho(
+            "the prepared task artifacts no longer match the ones this manifest was built "
+            "against; the split refers to a pool that has changed",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@prompts_app.command("verify")
+def prompts_verify(
+    manifest_id: str = typer.Option(..., "--manifest-id", help="Manifest id to verify."),
+) -> None:
+    """Recheck a frozen manifest against the task artifacts currently on disk.
+
+    Loading the manifest already recomputes its content hash, so an edited file fails here
+    before anything else is checked.
+    """
+    from .tasks.prompt_manifest import (
+        PromptManifestError,
+        load_prompt_manifest,
+        verify_prompt_manifest,
+    )
+
+    try:
+        manifest = load_prompt_manifest(manifest_id)
+    except PromptManifestError as error:
+        typer.secho(f"prompt manifest failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    report = verify_prompt_manifest(manifest)
+    report["total_prompts"] = len(manifest.assignments)
+    report["role_counts"] = dict(manifest.role_counts)
+    report["manifest_hash"] = manifest.manifest_hash
+    _echo_json(report)
+
+    if not report["valid"]:
+        typer.secho(
+            f"manifest {manifest_id} does not match the prepared task: {report['mismatches']}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 @directions_app.command("synthetic")

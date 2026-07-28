@@ -194,6 +194,110 @@ class DirectionFamilyConfig(Base):
         return self
 
 
+# The only two layers this arm may calibrate at. A third layer is a researcher degree of
+# freedom: trying one after seeing the first two fail is selection on the outcome, so the
+# config refuses it rather than leaving it to discipline.
+ALLOWED_CALIBRATION_LAYERS = (13, 20)
+
+# The preregistered ratio grid, exactly. Ascending, because the selection rule is "smallest
+# passing ratio" and a reordering would change which ratio wins.
+FROZEN_NORM_RATIOS = (0.02, 0.05, 0.10, 0.20, 0.40)
+
+STATE_AUDIT_TARGET_NAME = "delta_clean_top_margin"
+
+
+class CalibrationThresholdConfig(Base):
+    """Pass conditions for one norm ratio, as declared in the config."""
+
+    min_large_effect_fraction: float = Field(gt=0.0, le=1.0)
+    large_effect_threshold: float = Field(gt=0.0)
+    min_median_abs_effect: float = Field(gt=0.0)
+    max_p95_abs_effect: float = Field(gt=0.0)
+
+
+class CalibrationPlanConfig(Base):
+    """How to plan calibration for the state-dependence arm.
+
+    References no weights: planning reads the frozen prompt and direction manifests plus the
+    model config's pinned identity, and never loads a model. What this validator can check on
+    its own it checks here; the cross-checks that need the manifests on disk (the calibration
+    prompt count, the direction count, the model revision agreeing with the direction family)
+    happen at plan-build time, where the manifests are actually read.
+    """
+
+    name: str
+    plan_id: str
+    study_id: str
+    target: str
+    model_ref: str
+    prompt_manifest_id: str
+    direction_family_id: str
+
+    primary_layer: int
+    fallback_layer: int
+    norm_ratios: list[float] = Field(min_length=1)
+
+    thresholds: CalibrationThresholdConfig
+    noop_tolerance: float = Field(gt=0.0)
+    percentile_method: str
+    median_method: str
+
+    expected_role_counts: dict[PromptRole, int] = Field(min_length=1)
+    expected_direction_count: int = Field(gt=0)
+    expected_signed_directions: int = Field(gt=0)
+    master_seed: int
+    selection_algorithm_version: str
+
+    @model_validator(mode="after")
+    def _check_plan_config(self) -> CalibrationPlanConfig:
+        if self.target != STATE_AUDIT_TARGET_NAME:
+            raise ValueError(
+                f"target must be {STATE_AUDIT_TARGET_NAME!r} for this arm, got {self.target!r}. "
+                "The benchmark's delta_margin is a different quantity and is not calibrated here."
+            )
+
+        if tuple(self.norm_ratios) != FROZEN_NORM_RATIOS:
+            raise ValueError(
+                f"norm_ratios must be exactly {list(FROZEN_NORM_RATIOS)} in that order, got "
+                f"{self.norm_ratios}. Widening or reordering the grid after preregistration is "
+                "an amendment, not a config change."
+            )
+
+        for name, layer in (
+            ("primary_layer", self.primary_layer),
+            ("fallback_layer", self.fallback_layer),
+        ):
+            if layer not in ALLOWED_CALIBRATION_LAYERS:
+                raise ValueError(
+                    f"{name} {layer} is not one of the preregistered layers "
+                    f"{list(ALLOWED_CALIBRATION_LAYERS)}; no third layer may be calibrated"
+                )
+        if self.primary_layer == self.fallback_layer:
+            raise ValueError("the fallback layer must differ from the primary layer")
+        if self.primary_layer != ALLOWED_CALIBRATION_LAYERS[0]:
+            raise ValueError(
+                f"the primary layer is preregistered as {ALLOWED_CALIBRATION_LAYERS[0]}, got "
+                f"{self.primary_layer}"
+            )
+
+        missing = sorted(role.value for role in PromptRole if role not in self.expected_role_counts)
+        if missing:
+            raise ValueError(f"expected_role_counts must name every prompt role; missing {missing}")
+        if any(count <= 0 for count in self.expected_role_counts.values()):
+            raise ValueError("every expected role count must be positive")
+
+        if self.expected_signed_directions != 2 * self.expected_direction_count:
+            raise ValueError(
+                f"expected_signed_directions {self.expected_signed_directions} is not two per "
+                f"direction for {self.expected_direction_count} directions"
+            )
+        return self
+
+    @property
+    def calibration_prompt_count(self) -> int:
+        return self.expected_role_counts[PromptRole.CALIBRATION]
+
+
 class InterventionConfig(Base):
     """A grid of interventions for one mechanism."""
 

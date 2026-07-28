@@ -38,6 +38,9 @@ app = typer.Typer(
 )
 data_app = typer.Typer(help="Prepare task datasets.", no_args_is_help=True)
 prompts_app = typer.Typer(help="Freeze and inspect prompt-role manifests.", no_args_is_help=True)
+calibration_app = typer.Typer(
+    help="Plan, summarize, and decide intervention-strength calibration.", no_args_is_help=True
+)
 directions_app = typer.Typer(
     help="Create and inspect intervention directions.", no_args_is_help=True
 )
@@ -48,6 +51,7 @@ verify_app = typer.Typer(help="Verify run artifacts.", no_args_is_help=True)
 
 app.add_typer(data_app, name="data")
 app.add_typer(prompts_app, name="prompts")
+app.add_typer(calibration_app, name="calibration")
 app.add_typer(directions_app, name="directions")
 app.add_typer(interventions_app, name="interventions")
 app.add_typer(trials_app, name="trials")
@@ -90,7 +94,12 @@ def doctor() -> None:
         "devices": available_devices(),
     }
 
-    from .config import DirectionFamilyConfig, InterventionConfig, PromptManifestConfig
+    from .config import (
+        CalibrationPlanConfig,
+        DirectionFamilyConfig,
+        InterventionConfig,
+        PromptManifestConfig,
+    )
 
     config_types: list[tuple[str, type]] = [
         ("configs/models", ModelConfig),
@@ -99,6 +108,7 @@ def doctor() -> None:
         ("configs/interventions", InterventionConfig),
         ("configs/prompts", PromptManifestConfig),
         ("configs/directions", DirectionFamilyConfig),
+        ("configs/calibration", CalibrationPlanConfig),
     ]
 
     results: dict[str, Any] = {}
@@ -304,6 +314,199 @@ def directions_synthetic(
             "validated": False,
         }
     )
+
+
+@calibration_app.command("plan")
+def calibration_plan(
+    config: Path = typer.Option(..., "--config", help="Path to a calibration-plan config."),
+    force: bool = typer.Option(
+        False, "--force", help="Replace an existing, different plan at the same path."
+    ),
+) -> None:
+    """Freeze the calibration plan: thresholds, ratios, layers, and expected counts.
+
+    Loads no model. It reads the frozen prompt manifest, the frozen direction family, and the
+    pinned model config's identity, cross-checks them, and does arithmetic.
+
+    This is calibration planning, not calibration. No prompt is run, no state norm is measured,
+    no intervention is applied, and nothing it writes is a scientific result. Rerunning with
+    identical inputs leaves an identical plan untouched; a different plan is refused unless
+    force is passed, because thresholds chosen after seeing the numbers are not thresholds.
+    """
+    from .calibration.plan import CalibrationPlanError, plan_command
+
+    try:
+        report = plan_command(config, force=force)
+    except CalibrationPlanError as error:
+        typer.secho(f"calibration plan failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+
+    if not report["verification"]["valid"]:
+        typer.secho(
+            f"the plan does not match the manifests it cites: {report['verification']['failures']}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@calibration_app.command("verify-plan")
+def calibration_verify_plan(
+    plan_id: str = typer.Option(..., "--plan-id", help="Calibration plan id to verify."),
+) -> None:
+    """Recheck a frozen plan against the manifests it cites. Loads no model.
+
+    Loading the plan already recomputes its own content hash, so an edited file fails here
+    before anything else is checked.
+    """
+    from .calibration.plan import (
+        CalibrationPlanError,
+        load_calibration_plan,
+        plan_path,
+        plan_report,
+        verify_calibration_plan,
+    )
+
+    try:
+        record = load_calibration_plan(plan_id)
+    except CalibrationPlanError as error:
+        typer.secho(f"calibration plan failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    report = plan_report(record, "verified", plan_path(plan_id))
+    report["verification"] = verify_calibration_plan(record)
+    _echo_json(report)
+
+    if not report["verification"]["valid"]:
+        typer.secho(
+            f"calibration plan {plan_id} did not verify: {report['verification']['failures']}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@calibration_app.command("summarize")
+def calibration_summarize(
+    plan_id: str = typer.Option(..., "--plan-id", help="Calibration plan to judge against."),
+    observations: Path = typer.Option(
+        ..., "--observations", help="JSONL of state-audit observations to summarize."
+    ),
+    layer: int = typer.Option(..., "--layer", help="Which calibrated layer to summarize."),
+    failures: Path | None = typer.Option(
+        None, "--failures", help="JSONL of recorded intervention failures, if any."
+    ),
+    output: Path | None = typer.Option(None, "--output", help="Write the summaries to a file."),
+) -> None:
+    """Compute one ratio summary per preregistered ratio from supplied observations.
+
+    Loads no model. Every observation revalidates its own target against its own logits as it is
+    read, so a summary can only be built from records that already recompute.
+
+    The summaries say whether each grid point met the preregistered conditions. They are
+    calibration infrastructure, not a scientific result.
+    """
+    from .calibration.criteria import CriteriaError
+    from .calibration.observations import (
+        ObservationLoadError,
+        read_failures,
+        read_state_audit_observations,
+        summarize_layer,
+    )
+    from .calibration.plan import CalibrationPlanError, load_calibration_plan
+    from .calibration.strength import StrengthError
+
+    try:
+        plan = load_calibration_plan(plan_id)
+        records = read_state_audit_observations(observations)
+        recorded_failures = read_failures(failures)
+        summaries = summarize_layer(records, plan, layer, failures=recorded_failures)
+    except (CalibrationPlanError, ObservationLoadError, StrengthError, CriteriaError) as error:
+        typer.secho(f"calibration summary failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    payload = {
+        "plan_id": plan.plan_id,
+        "plan_hash": plan.plan_hash,
+        "layer": layer,
+        "observations_read": len(records),
+        "failures_read": len(recorded_failures),
+        "summaries": [summary.model_dump(mode="json") for summary in summaries],
+        "passing_ratios": [s.norm_ratio for s in summaries if s.passed],
+        "scientific_result": False,
+        "notes": (
+            "Calibration infrastructure. These summaries describe an intervention-strength "
+            "grid; they are not a measurement of the model's abilities."
+        ),
+    }
+    _echo_json(payload)
+    if output is not None:
+        atomic_write_json(output, payload)
+
+
+@calibration_app.command("select")
+def calibration_select(
+    plan_id: str = typer.Option(..., "--plan-id", help="Calibration plan to select under."),
+    summaries: Path = typer.Option(
+        ..., "--summaries", help="Summaries file for the primary layer."
+    ),
+    fallback_summaries: Path | None = typer.Option(
+        None,
+        "--fallback-summaries",
+        help="Summaries for the fallback layer. Only valid when the primary layer produced none.",
+    ),
+    output: Path | None = typer.Option(None, "--output", help="Write the decision to a file."),
+) -> None:
+    """Choose the ratio mechanically, or report the fallback status.
+
+    Smallest passing ratio in preregistered order. Not the largest effect, not the most flips,
+    and not whatever a forecaster does best on: any of those would choose the stimulus using the
+    outcome. A passing primary layer prohibits the fallback.
+
+    Loads no model and reads no prompt. This is a calibration decision, not a scientific result.
+    """
+    from .calibration.observations import ObservationLoadError, read_ratio_summaries
+    from .calibration.plan import (
+        CalibrationPlanError,
+        build_decision_record,
+        load_calibration_plan,
+    )
+    from .calibration.selection import SelectionError, select_calibration_ratio
+
+    try:
+        plan = load_calibration_plan(plan_id)
+        primary = read_ratio_summaries(summaries)
+        fallback = read_ratio_summaries(fallback_summaries) if fallback_summaries else None
+        selection = select_calibration_ratio(
+            primary_layer=plan.primary_layer,
+            fallback_layer=plan.fallback_layer,
+            expected_ratios=plan.norm_ratios,
+            primary_summaries=primary,
+            fallback_summaries=fallback,
+        )
+        decision = build_decision_record(plan, selection)
+    except (CalibrationPlanError, ObservationLoadError, SelectionError) as error:
+        typer.secho(f"calibration selection failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    payload = decision.model_dump(mode="json")
+    payload["notes"] = (
+        "Calibration decision. Chooses an intervention strength; measures nothing about the "
+        "model and is not a scientific result."
+    )
+    _echo_json(payload)
+    if output is not None:
+        atomic_write_json(output, decision.model_dump(mode="json"))
+
+    if decision.status.value == "failed_all_layers":
+        typer.secho(
+            "no ratio passed at either preregistered layer; the study stops under this design",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 @directions_app.command("build-family")

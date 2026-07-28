@@ -155,6 +155,12 @@ This estimate supersedes the compute figure in `docs/bluedot/current_state_audit
 which applied the full five-ratio grid to every role and therefore overstated the cost by about
 2.7 times.
 
+The arithmetic above is now encoded and tested rather than only written down. `CalibrationForwardCounts`
+derives every figure from the role counts, the signed-direction count, and the ratio count, and
+its validator rejects a set of numbers that does not add up. The frozen plan at
+`data/calibration_plans/bluedot_state_dependence_calibration_v1.json` carries the derived
+counts, and a test asserts the primary total is 5,072 and not the superseded 13,776.
+
 ## Cross-cutting factors
 
 **Uncertainty from a small timing sample.** The median rests on three timed forwards of a

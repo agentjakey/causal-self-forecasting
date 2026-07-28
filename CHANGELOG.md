@@ -4,6 +4,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added (2026-07-28, BlueDot slice B3a: study target and calibration rules)
+
+* `state_audit_target.py`: the arm's target `delta_clean_top_margin`, as pure float64 functions
+  for selecting the clean preferred label (ties broken in fixed A, B, C, D order), computing a
+  margin around a caller-supplied label, computing the complete target, and independently
+  verifying a stored target from saved logits. The benchmark's `delta_margin` is untouched and
+  keeps its dataset-correct-answer meaning; the module lives at the package root beside
+  `hashing.py` because `schemas.py` needs it and importing it through `scoring/` would cycle.
+* `StateAuditObservationRecord`, a separate record from `ObservationRecord`. Its validator
+  recomputes the label, both margins, the delta, and the flip from the logits stored beside
+  them, so a stored target that disagrees with its own logits does not load. It also refuses a
+  direction reference that names a construction role, and requires a zero strength for a no-op.
+* `calibration/strength.py`: the global rule, `alpha = ratio * median(clean state norm over the
+  32 calibration prompts)`, with norms aligned by prompt identity rather than input order. There
+  is deliberately no prompt-specific strength function, and `check_global_alpha` refuses a grid
+  point that used more than one alpha.
+* `calibration/criteria.py`: the six frozen pass conditions, inclusive at the boundary, with
+  `numpy.quantile(method="linear")` percentiles recorded in the plan.
+* `calibration/selection.py`: the layer-13-primary, layer-20-fallback state machine. Smallest
+  passing ratio in preregistered order; a passing primary layer prohibits the fallback; a
+  partial or widened ratio grid is refused.
+* `calibration/plan.py` and `calibration/observations.py`: the frozen plan record with its own
+  content hash, the encoded forward arithmetic, artifact-only plan verification, and the glue
+  that turns supplied observations into ratio summaries and a hashed decision record.
+* `CalibrationPlanRecord`, `LayerReferenceNormRecord`, `CalibrationRatioSummary`,
+  `CalibrationDecisionRecord`, `CalibrationThresholds`, `CalibrationForwardCounts`, and
+  `CalibrationCriterionResult`, all carrying `scientific_result: Literal[False]` where they
+  could be mistaken for a finding.
+* `csf calibration plan`, `verify-plan`, `summarize`, and `select`. None loads a model, and a
+  test replaces `load_model` with a function that raises to prove it.
+* `CalibrationPlanConfig` and `configs/calibration/bluedot_state_dependence.yaml`. The config
+  refuses a third layer, an altered or reordered ratio grid, a target other than
+  `delta_clean_top_margin`, and incomplete role counts; the plan builder additionally refuses a
+  prompt manifest without 32 calibration prompts, a direction family without eight directions,
+  and a direction family built against a different model revision. `csf doctor` validates
+  `configs/calibration`.
+* `paths.calibration_plans_dir` and `paths.calibration_plan_path`.
+* 143 offline tests covering the target and its boundary cases, the record validators, the
+  strength rule, every pass condition at its exact threshold, the state machine including
+  fallback prohibition and total failure, plan and decision hashing, and the CLI.
+
+### Fixed (2026-07-28)
+
+* `check_global_alpha` compared alphas through a mapping keyed by prompt id. With 16 candidates
+  per prompt, a single tampered alpha was overwritten by its neighbours and disappeared. It now
+  compares every observation. Caught by a CLI test that tampered with one record.
+* Calibration planning transitively imported torch through the direction-family module, so a
+  command that loads no model still paid a multi-second import. The import is now lazy.
+
+### Measured (infrastructure, not scientific)
+
+* The calibration plan was frozen to
+  `data/calibration_plans/bluedot_state_dependence_calibration_v1.json`, plan hash
+  `sha256:a212c6e80f96db55e1aeb0b1879fef441aa6d893a73b7fc43a94142913f97877`. Encoded forward
+  counts: 144 smoke, 2,624 calibration per layer, 1,728 training, 576 final test, 5,072 primary
+  total, 7,696 with the fallback. No model was loaded, no prompt was run, no state norm was
+  measured, and no ratio has been selected.
+
 ### Added (2026-07-27, BlueDot slice B2a: the deterministic direction family)
 
 * `LoadedModel.output_embedding()`: the smallest safe accessor for the output-embedding matrix,

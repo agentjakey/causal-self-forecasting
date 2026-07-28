@@ -229,7 +229,8 @@ baselines, and it defers Phases 5, 6, and 8 through 13.
 | B1 | Prompt manifests: `PromptRole`, `PromptManifest`, `csf prompts manifest` | **done, 2026-07-27**; split frozen at `data/prompt_manifests/bluedot_state_dependence_v1.json` |
 | B2a | Direction bank: eight unit directions built from the pinned unembedding | **done, 2026-07-27**; family frozen at `data/direction_manifests/bluedot_state_dependence_directions_v1.json` |
 | B2b | The fixed 16-dimensional intervention projection matrix | not started |
-| B3 | Global state-relative-by-calibration strength and `norm_ratio` | not started |
+| B3a | Study target `delta_clean_top_margin`, global strength rule, calibration schemas, thresholds, layer state machine, and the frozen plan | **done, 2026-07-28**; plan frozen at `data/calibration_plans/bluedot_state_dependence_calibration_v1.json` |
+| B3b | Running the real calibration sweep and producing a decision | not started; needs the model |
 | B4 | 17-candidate and 81-candidate study candidate sets | not started |
 | B5 | Commitment-protocol hardening: extended key, no-selection reveal, pre-existing-outcome refusal | not started |
 | B6 | `StateAuditExample` and block-structured features | not started |

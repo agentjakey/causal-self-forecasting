@@ -81,6 +81,26 @@ uv run csf directions verify-family --manifest-id bluedot_state_dependence_direc
 stored vector's content hash, dimensions, norms, orthogonality, and family completeness. With
 `--regenerate` it rebuilds all eight from the pinned weights and compares, writing nothing.
 
+The calibration plan is frozen too, at
+`data/calibration_plans/bluedot_state_dependence_calibration_v1.json`. It fixes the target, the
+five norm ratios, the two permitted layers, and the six pass conditions **before** any
+calibration number exists, which is the only thing that makes a threshold a threshold.
+
+```powershell
+uv run csf calibration plan --config configs/calibration/bluedot_state_dependence.yaml
+uv run csf calibration verify-plan --plan-id bluedot_state_dependence_calibration_v1
+uv run csf calibration summarize --plan-id ... --observations obs.jsonl --layer 13
+uv run csf calibration select --plan-id ... --summaries summaries.json
+```
+
+None of these loads a model. Strength is one global alpha per layer and ratio, never a
+per-prompt one: `public_view` publishes `strength` to every method, so a prompt-relative
+strength would hand the visible-information baseline the prompt's state norm. The selector takes
+the **smallest** passing ratio in preregistered order, never the largest effect, because
+choosing the stimulus by the outcome would make the comparison circular.
+
+**No calibration has been run and no ratio has been selected.**
+
 **Constructing a direction is not validating one.** These are stimuli with a recorded recipe.
 Their artifacts carry `validated: false`, and nothing about them licenses calling any direction
 meaningful, load-bearing, or bias-related. The stored ids are opaque hash prefixes and the
@@ -144,6 +164,10 @@ uv run csf prompts verify --manifest-id bluedot_state_dependence_v1
 # Build the BlueDot direction family (loads the pinned model's unembedding; runs no prompt)
 uv run csf directions build-family --config configs/directions/bluedot_state_dependence.yaml
 uv run csf directions verify-family --manifest-id bluedot_state_dependence_directions_v1
+
+# Freeze the calibration plan (offline, no model)
+uv run csf calibration plan --config configs/calibration/bluedot_state_dependence.yaml
+uv run csf calibration verify-plan --plan-id bluedot_state_dependence_calibration_v1
 
 # Smoke pipeline on the fixture model, offline
 uv run csf directions synthetic --config configs/experiments/smoke.yaml

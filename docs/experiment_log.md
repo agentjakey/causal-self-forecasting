@@ -381,10 +381,71 @@ revision, the config, the seed, and the algorithm versions it records.
 Offline suite before loading any weights: **400 passed, 1 skipped** (326 before, 74 added).
 Ruff, ruff format, pyright, and `csf doctor` clean.
 
+## 2026-07-28: study target and calibration rules implemented (infrastructure, not a result)
+
+**The target and the calibration rules were implemented. No model was loaded. No prompt was run.
+No state norm was measured. No intervention was applied. No calibration result exists.**
+
+Implemented:
+
+* the study target `delta_clean_top_margin`, measured around the model's own clean preferred
+  answer with `c_star` held fixed after the intervention. The benchmark's `delta_margin`, which
+  measures the margin around the dataset-correct answer, is unchanged and keeps its own
+  validator; the arm's observations live in a separate `StateAuditObservationRecord` whose
+  validator recomputes the label, both margins, the delta, and the flip from the logits stored
+  beside them;
+* the global strength rule: one absolute alpha per layer and ratio,
+  `alpha = ratio * median(clean state norm over the 32 calibration prompts)`. There is
+  deliberately no prompt-specific strength function, and `check_global_alpha` refuses a set of
+  observations that used more than one alpha at a grid point;
+* the six frozen pass conditions, the layer-13-primary, layer-20-fallback state machine, and
+  the records for plans, reference norms, ratio summaries, and decisions.
+
+The plan was frozen. Values below are read from the written artifact.
+
+| Field | Value |
+| --- | --- |
+| Plan | `data/calibration_plans/bluedot_state_dependence_calibration_v1.json` |
+| Plan hash | `sha256:a212c6e80f96db55e1aeb0b1879fef441aa6d893a73b7fc43a94142913f97877` |
+| Config hash | `sha256:9b777aa488d109bdca227f20a0e5ed4c664fb9a3a468a6019382df51f52f4954` |
+| Prompt manifest | `bluedot_state_dependence_v1`, `sha256:bf351c9d73042fcb3d0cdcb18247ded3411413d73000e047f1ba6ba9ab5b25b9` |
+| Direction family | `bluedot_state_dependence_directions_v1`, `sha256:809fbb5b033da740a01574ad5a0ca48f34baca38eef1504a0d66bba8e2fb9138` |
+| Model | `google/gemma-3-1b-it` at `dcc83ea841ab6100d6b47a070329e1ba4cf78752` (read from the config; no weights loaded) |
+| Target | `delta_clean_top_margin` |
+| Layers | primary 13, fallback 20 |
+| Ratios | 0.02, 0.05, 0.10, 0.20, 0.40 |
+| Thresholds | large-effect fraction >= 0.15 at magnitude >= 0.10; median >= 0.05; 95th percentile <= 4.0 |
+| No-op tolerance | 1.0e-3 |
+| Median convention | `numpy.median`, even samples average the two central sorted values |
+| Percentile convention | `numpy.quantile(method='linear')` |
+
+Encoded forward counts: smoke 8 x 18 = 144; calibration 32 x 82 = 2,624 per layer; training
+96 x 18 = 1,728; final test 32 x 18 = 576; primary total **5,072**; layer-20 fallback adds
+**2,624** for 7,696. Only calibration sweeps the ratio grid, which is why it carries 82 forwards
+per prompt and every other role carries 18. This supersedes the 13,776 figure in the first
+version of `docs/bluedot/current_state_audit.md`.
+
+Rerunning the plan command reported `status: unchanged` and left the file byte-identical with
+its mtime untouched. `csf calibration verify-plan` reports `valid: true` with no failures.
+
+**No calibration was run and no ratio has been selected.** The summarizer and the selector were
+exercised only on synthetic fixture observations inside the test suite; those numbers were
+constructed to test the code paths and are not measurements of anything.
+
+Two bugs the tests caught during this slice. `check_global_alpha` keyed its comparison by prompt
+id, so with 16 candidates per prompt a single tampered alpha was overwritten by its neighbours
+and vanished; it now compares every observation. And planning transitively imported torch
+through the direction-family module, which made a command that loads no model pay a
+multi-second import; that import is now lazy.
+
+Suite after this slice: **543 passed, 1 skipped** (400 before, 143 added). Ruff, ruff format,
+pyright, and `csf doctor` clean.
+
 ## Next entry
 
-The next step is implementation slice B2b in `docs/build_plan.md`: the fixed 16-dimensional
-intervention projection matrix. It needs no model.
+The next steps are B2b, the fixed 16-dimensional intervention projection matrix, and the
+commitment-protocol hardening. Both need no model. Running the real calibration sweep (B3b) is a
+separate maintainer decision and is the first step in this arm that produces measured numbers.
 
 No CSF-Bench scientific result exists yet, and none should be reported until a real comparison
 has been run and verified.

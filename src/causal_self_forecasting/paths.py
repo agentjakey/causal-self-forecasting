@@ -77,6 +77,21 @@ def direction_manifest_path(family_id: str) -> Path:
     return direction_manifests_dir() / f"{family_id}.json"
 
 
+def calibration_plans_dir() -> Path:
+    """Where frozen calibration plans live.
+
+    Tracked, like the prompt and direction manifests. A plan says what would count as a passing
+    ratio, and it has to be written down before the numbers exist or it is not a plan. The state
+    norms, observations, and decisions that a real calibration produces belong in ignored run
+    directories instead.
+    """
+    return data_dir() / "calibration_plans"
+
+
+def calibration_plan_path(plan_id: str) -> Path:
+    return calibration_plans_dir() / f"{plan_id}.json"
+
+
 def artifacts_dir() -> Path:
     return repo_root() / "artifacts"
 

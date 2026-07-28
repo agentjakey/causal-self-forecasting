@@ -1,0 +1,60 @@
+# Calibration plan for the BlueDot state-dependence arm.
+#
+# Preregistered in docs/bluedot/preregistration_state_dependence.md section 7.3. Every value
+# here was fixed before any calibration number existed, which is the only thing that makes a
+# threshold a threshold. Changing one changes the plan hash, and is an amendment to that
+# document, recorded in its amendment log.
+#
+# Planning loads no model. It reads the frozen prompt manifest, the frozen direction family, and
+# the pinned model config's identity, then does arithmetic.
+name: bluedot_state_dependence_calibration
+plan_id: bluedot_state_dependence_calibration_v1
+study_id: bluedot_state_dependence
+
+# The arm's own target. Not the benchmark's delta_margin, which measures the margin around the
+# dataset-correct answer and keeps its own meaning.
+target: delta_clean_top_margin
+
+model_ref: configs/models/gemma3_1b_it.yaml
+prompt_manifest_id: bluedot_state_dependence_v1
+direction_family_id: bluedot_state_dependence_directions_v1
+
+# Layer 13 is primary. Layer 20 is the only permitted fallback, and it is reachable only when no
+# layer-13 ratio satisfies every condition. No third layer is valid.
+primary_layer: 13
+fallback_layer: 20
+
+# The frozen grid, ascending. The selection rule is "smallest passing ratio", so the order here
+# decides which ratio wins.
+norm_ratios: [0.02, 0.05, 0.10, 0.20, 0.40]
+
+thresholds:
+  # At least 15 percent of non-no-op effects must reach 0.10 in absolute value.
+  min_large_effect_fraction: 0.15
+  large_effect_threshold: 0.10
+  # The median absolute non-no-op effect must be at least 0.05: below this nothing measurable
+  # is happening.
+  min_median_abs_effect: 0.05
+  # The 95th percentile must be at most 4.0: above this the output distribution has been
+  # destroyed and the target is no longer a small perturbation of the clean preference.
+  max_p95_abs_effect: 4.0
+
+# The existing harness tolerance. A no-op must reproduce the clean output to within this, or the
+# harness rather than the model produced the effects.
+noop_tolerance: 1.0e-3
+
+percentile_method: "numpy.quantile(method='linear')"
+median_method: "numpy.median(linear interpolation; even samples average the two central values)"
+
+expected_role_counts:
+  smoke: 8
+  calibration: 32
+  training: 96
+  final_test: 32
+
+# Eight directions, each applied at both signs.
+expected_direction_count: 8
+expected_signed_directions: 16
+
+master_seed: 20260727
+selection_algorithm_version: bluedot_smallest_passing_ratio_v1.0

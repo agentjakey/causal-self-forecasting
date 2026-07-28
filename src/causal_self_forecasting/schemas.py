@@ -22,6 +22,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from . import SCHEMA_VERSION
 from .hashing import hash_object
+from .state_audit_target import (
+    ANSWER_LABELS,
+    TARGET_TOLERANCE,
+    TargetError,
+    verify_state_audit_target,
+)
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 _HASH_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -880,6 +886,546 @@ class ScoreRecord(Versioned):
     predicted_flip_probability: Probability
     observed_flip: bool
     top_effect_candidate_correct: bool | None = None
+
+
+# ---------------------------------------------------------------------------
+# The BlueDot state-dependence arm: observations and calibration
+#
+# These records sit beside the benchmark's own, never on top of them. `ObservationRecord` keeps
+# its dataset-correct-answer semantics and its validator untouched; the arm's observations live
+# in `StateAuditObservationRecord` with their own target and their own checks, so an artifact on
+# disk always says which quantity it holds.
+#
+# Every record here carries `scientific_result: Literal[False]` where it could plausibly be
+# mistaken for a finding. Calibration chooses an intervention strength; it measures nothing
+# about the model's abilities and cannot become a result.
+# ---------------------------------------------------------------------------
+
+
+# Terms that would name a direction's construction role or family. A direction reference handed
+# to an observation must be opaque, so the same fence that guards `public_metadata` guards it.
+_FORBIDDEN_DIRECTION_TERMS = (
+    "answer_token",
+    "random_orthogonal",
+    "random_control",
+    "direction_positive",
+    "direction_negative",
+    "noop_control",
+    "construction_role",
+    "analysis_role",
+    "centered",
+    "unembed",
+)
+
+
+class StateAuditObservationRecord(Versioned):
+    """One applied intervention in the state-dependence arm, with its target.
+
+    The validator recomputes the clean preferred label, both margins, the delta, and the flip
+    from the logits stored alongside them. A record whose stored target disagrees with its own
+    logits does not load, so the target can be checked by a third party without rerunning the
+    model.
+    """
+
+    study_id: Identifier
+    run_id: Identifier
+    trial_id: Identifier
+    candidate_id: Identifier
+    group_id: Identifier
+    variant_id: Identifier
+    prompt_role: PromptRole
+
+    target_name: Literal["delta_clean_top_margin"] = "delta_clean_top_margin"
+    clean_preferred_label: str
+    clean_logits: dict[str, float]
+    intervened_logits: dict[str, float]
+    clean_top_margin: float
+    intervened_top_margin: float
+    delta_clean_top_margin: float
+    answer_flip: bool
+
+    is_noop: bool
+    # Opaque. Never a construction role or a family label.
+    direction_ref: str
+    direction_vector_hash: HashString | None = None
+    layer: int = Field(ge=0)
+    norm_ratio: float = Field(ge=0.0)
+    global_alpha: float
+
+    model_id: str
+    model_revision: str
+    prompt_manifest_hash: HashString
+    direction_family_hash: HashString
+    config_hash: HashString
+    observed_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _check_target(self) -> StateAuditObservationRecord:
+        lowered = self.direction_ref.lower()
+        leaked = [term for term in _FORBIDDEN_DIRECTION_TERMS if term in lowered]
+        if leaked:
+            raise ValueError(
+                f"direction_ref {self.direction_ref!r} names {sorted(leaked)}, which would tell "
+                "a reader the direction's construction role; the reference must be opaque"
+            )
+        if self.clean_preferred_label not in ANSWER_LABELS:
+            raise ValueError(
+                f"clean_preferred_label {self.clean_preferred_label!r} is not one of "
+                f"{list(ANSWER_LABELS)}"
+            )
+
+        if self.is_noop:
+            if self.global_alpha != 0.0 or self.norm_ratio != 0.0:
+                raise ValueError(
+                    "a no-op observation must record norm_ratio 0.0 and global_alpha 0.0, got "
+                    f"ratio {self.norm_ratio} and alpha {self.global_alpha}"
+                )
+        elif self.global_alpha == 0.0:
+            raise ValueError(
+                f"candidate {self.candidate_id} is not a no-op but records a zero global_alpha"
+            )
+
+        try:
+            problems = verify_state_audit_target(
+                self.clean_logits,
+                self.intervened_logits,
+                self.clean_preferred_label,
+                self.clean_top_margin,
+                self.intervened_top_margin,
+                self.delta_clean_top_margin,
+                self.answer_flip,
+                tolerance=TARGET_TOLERANCE,
+            )
+        except TargetError as error:
+            raise ValueError(str(error)) from error
+        if problems:
+            raise ValueError(
+                f"observation {self.trial_id}/{self.candidate_id} disagrees with its own "
+                f"logits: {problems}"
+            )
+        return self
+
+
+class CalibrationThresholds(Base):
+    """The frozen pass conditions for one norm ratio.
+
+    Recorded in the plan and covered by its hash, so a run cannot be re-judged against different
+    conditions than the ones it was planned under.
+    """
+
+    # At least this fraction of non-no-op effects must reach `large_effect_threshold`.
+    min_large_effect_fraction: float = Field(gt=0.0, le=1.0)
+    large_effect_threshold: float = Field(gt=0.0)
+    min_median_abs_effect: float = Field(gt=0.0)
+    max_p95_abs_effect: float = Field(gt=0.0)
+
+    @model_validator(mode="after")
+    def _check_ordering(self) -> CalibrationThresholds:
+        if self.min_median_abs_effect > self.max_p95_abs_effect:
+            raise ValueError(
+                f"the median floor {self.min_median_abs_effect} exceeds the 95th-percentile "
+                f"ceiling {self.max_p95_abs_effect}; no distribution could satisfy both"
+            )
+        if self.large_effect_threshold > self.max_p95_abs_effect:
+            raise ValueError(
+                "the large-effect threshold exceeds the 95th-percentile ceiling; no ratio "
+                "could pass both conditions"
+            )
+        return self
+
+
+class CalibrationForwardCounts(Base):
+    """The planned forward-pass arithmetic, encoded rather than described.
+
+    Only calibration sweeps the ratio grid, so it carries `1 + directions * ratios + 1` forwards
+    per prompt while every other role carries `1 + directions + 1`. Getting that wrong is what
+    produced the superseded estimate in the audit, so the arithmetic is validated here.
+    """
+
+    signed_directions: int = Field(gt=0)
+    ratio_count: int = Field(gt=0)
+    smoke_prompts: int = Field(ge=0)
+    calibration_prompts: int = Field(gt=0)
+    training_prompts: int = Field(ge=0)
+    final_test_prompts: int = Field(ge=0)
+
+    candidates_per_calibration_prompt: int = Field(gt=0)
+    candidates_per_other_prompt: int = Field(gt=0)
+    forwards_per_calibration_prompt: int = Field(gt=0)
+    forwards_per_other_prompt: int = Field(gt=0)
+
+    smoke_forwards: int = Field(ge=0)
+    calibration_forwards_per_layer: int = Field(gt=0)
+    training_forwards: int = Field(ge=0)
+    final_test_forwards: int = Field(ge=0)
+    primary_total_forwards: int = Field(gt=0)
+    fallback_additional_forwards: int = Field(gt=0)
+    with_fallback_total_forwards: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def _check_arithmetic(self) -> CalibrationForwardCounts:
+        expected_calibration_candidates = self.signed_directions * self.ratio_count + 1
+        expected_other_candidates = self.signed_directions + 1
+        checks: list[tuple[str, int, int]] = [
+            (
+                "candidates_per_calibration_prompt",
+                self.candidates_per_calibration_prompt,
+                expected_calibration_candidates,
+            ),
+            (
+                "candidates_per_other_prompt",
+                self.candidates_per_other_prompt,
+                expected_other_candidates,
+            ),
+            (
+                "forwards_per_calibration_prompt",
+                self.forwards_per_calibration_prompt,
+                1 + expected_calibration_candidates,
+            ),
+            (
+                "forwards_per_other_prompt",
+                self.forwards_per_other_prompt,
+                1 + expected_other_candidates,
+            ),
+            (
+                "smoke_forwards",
+                self.smoke_forwards,
+                self.smoke_prompts * (1 + expected_other_candidates),
+            ),
+            (
+                "calibration_forwards_per_layer",
+                self.calibration_forwards_per_layer,
+                self.calibration_prompts * (1 + expected_calibration_candidates),
+            ),
+            (
+                "training_forwards",
+                self.training_forwards,
+                self.training_prompts * (1 + expected_other_candidates),
+            ),
+            (
+                "final_test_forwards",
+                self.final_test_forwards,
+                self.final_test_prompts * (1 + expected_other_candidates),
+            ),
+            (
+                "primary_total_forwards",
+                self.primary_total_forwards,
+                self.smoke_forwards
+                + self.calibration_forwards_per_layer
+                + self.training_forwards
+                + self.final_test_forwards,
+            ),
+            (
+                "fallback_additional_forwards",
+                self.fallback_additional_forwards,
+                self.calibration_forwards_per_layer,
+            ),
+            (
+                "with_fallback_total_forwards",
+                self.with_fallback_total_forwards,
+                self.primary_total_forwards + self.calibration_forwards_per_layer,
+            ),
+        ]
+        wrong = [
+            f"{name} is {actual}, expected {expected}"
+            for name, actual, expected in checks
+            if actual != expected
+        ]
+        if wrong:
+            raise ValueError(f"the planned forward arithmetic does not add up: {wrong}")
+        return self
+
+
+class CalibrationPlanRecord(Versioned):
+    """The frozen calibration plan. Written before any calibration runs."""
+
+    plan_id: Identifier
+    study_id: Identifier
+    target_name: Literal["delta_clean_top_margin"] = "delta_clean_top_margin"
+
+    model_id: str
+    model_revision: str
+    prompt_manifest_id: Identifier
+    prompt_manifest_hash: HashString
+    direction_family_id: Identifier
+    direction_family_hash: HashString
+
+    calibration_prompt_count: int = Field(gt=0)
+    role_counts: dict[str, int]
+    direction_count: int = Field(gt=0)
+
+    primary_layer: int = Field(ge=0)
+    fallback_layer: int = Field(ge=0)
+    norm_ratios: list[float] = Field(min_length=1)
+
+    thresholds: CalibrationThresholds
+    noop_tolerance: float = Field(gt=0.0)
+    percentile_method: str
+    median_method: str
+    selection_algorithm_version: str
+    master_seed: int
+
+    forward_counts: CalibrationForwardCounts
+    config_hash: HashString
+    plan_hash: HashString
+
+    scientific_result: Literal[False] = False
+    config_path: str
+    created_at: datetime = Field(default_factory=utc_now)
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def _check_plan(self) -> CalibrationPlanRecord:
+        if self.primary_layer == self.fallback_layer:
+            raise ValueError("the fallback layer must differ from the primary layer")
+        if sorted(self.norm_ratios) != self.norm_ratios:
+            raise ValueError(
+                "norm_ratios must be stored in ascending order, because the selection rule is "
+                "'smallest passing ratio' and reordering would change which ratio wins"
+            )
+        if len(set(self.norm_ratios)) != len(self.norm_ratios):
+            raise ValueError("norm_ratios must not repeat a ratio")
+        if any(ratio <= 0.0 for ratio in self.norm_ratios):
+            raise ValueError("every norm ratio must be positive")
+        if self.forward_counts.ratio_count != len(self.norm_ratios):
+            raise ValueError(
+                f"the forward arithmetic assumes {self.forward_counts.ratio_count} ratios but "
+                f"the plan lists {len(self.norm_ratios)}"
+            )
+        if self.forward_counts.calibration_prompts != self.calibration_prompt_count:
+            raise ValueError("the forward arithmetic and the plan disagree on the prompt count")
+
+        recomputed = compute_calibration_plan_hash(self.model_dump(mode="json"))
+        if recomputed != self.plan_hash:
+            raise ValueError(
+                f"plan_hash {self.plan_hash} does not match the plan contents ({recomputed}); "
+                "the file has been edited since it was written"
+            )
+        return self
+
+
+class LayerReferenceNormRecord(Versioned):
+    """The median clean-state norm for one candidate layer.
+
+    The individual norms travel with the record. They are 32 numbers, and a reference norm no
+    one can recompute is a number to be taken on trust.
+    """
+
+    layer: int = Field(ge=0)
+    prompt_ids: list[str] = Field(min_length=1)
+    prompt_identity_hash: HashString
+    count: int = Field(gt=0)
+    state_norms: dict[str, float]
+    reference_norm: float = Field(gt=0.0)
+    median_method: str
+    prompt_manifest_hash: HashString
+    model_id: str
+    model_revision: str
+    scientific_result: Literal[False] = False
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _check_norms(self) -> LayerReferenceNormRecord:
+        if len(set(self.prompt_ids)) != len(self.prompt_ids):
+            raise ValueError("prompt_ids must not repeat")
+        if self.prompt_ids != sorted(self.prompt_ids):
+            raise ValueError("prompt_ids must be stored in sorted order for a stable identity")
+        if set(self.state_norms) != set(self.prompt_ids):
+            raise ValueError("state_norms must cover exactly the listed prompt ids")
+        if self.count != len(self.prompt_ids):
+            raise ValueError(f"count {self.count} does not match {len(self.prompt_ids)} prompts")
+        for prompt_id, norm in self.state_norms.items():
+            if not math.isfinite(norm) or norm <= 0.0:
+                raise ValueError(
+                    f"the state norm for {prompt_id} is {norm!r}; every norm must be finite and "
+                    "strictly positive"
+                )
+        if hash_object(self.prompt_ids) != self.prompt_identity_hash:
+            raise ValueError("prompt_identity_hash does not match the listed prompt ids")
+        return self
+
+
+class CalibrationCriterionResult(Base):
+    """One pass condition, with the number it was judged on."""
+
+    name: str
+    passed: bool
+    observed: float
+    threshold: float
+    comparison: str
+
+
+class CalibrationRatioSummary(Versioned):
+    """What one (layer, ratio) grid point looked like, and whether it passed."""
+
+    layer: int = Field(ge=0)
+    norm_ratio: float = Field(gt=0.0)
+    global_alpha: float = Field(gt=0.0)
+
+    expected_non_noop_observations: int = Field(ge=0)
+    observed_non_noop_observations: int = Field(ge=0)
+    noop_count: int = Field(ge=0)
+    failure_count: int = Field(ge=0)
+
+    finite_output_rate: float = Field(ge=0.0, le=1.0)
+    max_abs_noop_target: float = Field(ge=0.0)
+    fraction_above_effect_threshold: float = Field(ge=0.0, le=1.0)
+    median_abs_effect: float = Field(ge=0.0)
+    p95_abs_effect: float = Field(ge=0.0)
+    flip_count: int = Field(ge=0)
+
+    criteria: list[CalibrationCriterionResult] = Field(min_length=1)
+    passed: bool
+    supporting_artifact_hashes: dict[str, str] = Field(default_factory=dict)
+    scientific_result: Literal[False] = False
+
+    @model_validator(mode="after")
+    def _check_pass(self) -> CalibrationRatioSummary:
+        expected = all(criterion.passed for criterion in self.criteria)
+        if self.passed != expected:
+            raise ValueError(
+                f"passed is {self.passed} but the criteria say {expected}; a ratio passes only "
+                "when every condition passes"
+            )
+        return self
+
+
+class CalibrationStatus(StrEnum):
+    """The outcome of the layer-fallback state machine."""
+
+    PASSED_PRIMARY = "passed_primary"
+    FALLBACK_REQUIRED = "fallback_required"
+    PASSED_FALLBACK = "passed_fallback"
+    FAILED_ALL_LAYERS = "failed_all_layers"
+
+
+class CalibrationDecisionRecord(Versioned):
+    """The mechanically derived calibration decision."""
+
+    plan_id: Identifier
+    study_id: Identifier
+    status: CalibrationStatus
+    selected_layer: int | None = None
+    selected_norm_ratio: float | None = None
+    selected_global_alpha: float | None = None
+
+    primary_layer: int = Field(ge=0)
+    fallback_layer: int = Field(ge=0)
+    ratio_summaries: list[CalibrationRatioSummary] = Field(min_length=1)
+    selection_rationale: str
+    selection_algorithm_version: str
+
+    plan_hash: HashString
+    prompt_manifest_hash: HashString
+    direction_family_hash: HashString
+    environment: dict[str, Any] = Field(default_factory=dict)
+    decision_hash: HashString
+    scientific_result: Literal[False] = False
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _check_decision(self) -> CalibrationDecisionRecord:
+        selected = (self.selected_layer, self.selected_norm_ratio, self.selected_global_alpha)
+        succeeded = self.status in (
+            CalibrationStatus.PASSED_PRIMARY,
+            CalibrationStatus.PASSED_FALLBACK,
+        )
+        if succeeded and any(value is None for value in selected):
+            raise ValueError(
+                f"status {self.status.value} requires a selected layer, ratio, and alpha"
+            )
+        if not succeeded and any(value is not None for value in selected):
+            raise ValueError(
+                f"status {self.status.value} must not carry a selection; nothing was selected"
+            )
+        if (
+            self.status is CalibrationStatus.PASSED_PRIMARY
+            and self.selected_layer != self.primary_layer
+        ):
+            raise ValueError("a primary pass must select the primary layer")
+        if (
+            self.status is CalibrationStatus.PASSED_FALLBACK
+            and self.selected_layer != self.fallback_layer
+        ):
+            raise ValueError("a fallback pass must select the fallback layer")
+
+        recomputed = compute_calibration_decision_hash(self.model_dump(mode="json"))
+        if recomputed != self.decision_hash:
+            raise ValueError(
+                f"decision_hash {self.decision_hash} does not match the decision contents "
+                f"({recomputed}); the file has been edited since it was written"
+            )
+        return self
+
+
+# Fields covered by the plan hash. Creation metadata and the config path are outside it, so the
+# same plan hashes the same after the repository moves.
+CALIBRATION_PLAN_HASHED_FIELDS = (
+    "schema_version",
+    "plan_id",
+    "study_id",
+    "target_name",
+    "model_id",
+    "model_revision",
+    "prompt_manifest_id",
+    "prompt_manifest_hash",
+    "direction_family_id",
+    "direction_family_hash",
+    "calibration_prompt_count",
+    "role_counts",
+    "direction_count",
+    "primary_layer",
+    "fallback_layer",
+    "norm_ratios",
+    "thresholds",
+    "noop_tolerance",
+    "percentile_method",
+    "median_method",
+    "selection_algorithm_version",
+    "master_seed",
+    "forward_counts",
+    "config_hash",
+)
+
+CALIBRATION_DECISION_HASHED_FIELDS = (
+    "schema_version",
+    "plan_id",
+    "study_id",
+    "status",
+    "selected_layer",
+    "selected_norm_ratio",
+    "selected_global_alpha",
+    "primary_layer",
+    "fallback_layer",
+    "ratio_summaries",
+    "selection_rationale",
+    "selection_algorithm_version",
+    "plan_hash",
+    "prompt_manifest_hash",
+    "direction_family_hash",
+)
+
+
+def calibration_plan_payload(dumped: dict[str, Any]) -> dict[str, Any]:
+    missing = [name for name in CALIBRATION_PLAN_HASHED_FIELDS if name not in dumped]
+    if missing:
+        raise ValueError(f"calibration plan dump is missing hashed fields: {missing}")
+    return {name: dumped[name] for name in CALIBRATION_PLAN_HASHED_FIELDS}
+
+
+def compute_calibration_plan_hash(dumped: dict[str, Any]) -> str:
+    return hash_object(calibration_plan_payload(dumped))
+
+
+def calibration_decision_payload(dumped: dict[str, Any]) -> dict[str, Any]:
+    missing = [name for name in CALIBRATION_DECISION_HASHED_FIELDS if name not in dumped]
+    if missing:
+        raise ValueError(f"calibration decision dump is missing hashed fields: {missing}")
+    return {name: dumped[name] for name in CALIBRATION_DECISION_HASHED_FIELDS}
+
+
+def compute_calibration_decision_hash(dumped: dict[str, Any]) -> str:
+    return hash_object(calibration_decision_payload(dumped))
 
 
 # ---------------------------------------------------------------------------

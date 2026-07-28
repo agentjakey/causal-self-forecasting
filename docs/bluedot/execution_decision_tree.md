@@ -167,6 +167,17 @@ study.
 
 ## G4. Calibration at layer 13
 
+**Not run.** The plan is frozen at
+`data/calibration_plans/bluedot_state_dependence_calibration_v1.json`, plan hash
+`sha256:a212c6e80f96db55e1aeb0b1879fef441aa6d893a73b7fc43a94142913f97877`, and the conditions,
+the strength rule, and the selector are implemented and tested. No calibration has been
+executed, no state norm has been measured, and no ratio has been selected.
+
+The gate below is now machine-checkable rather than a checklist:
+`csf calibration summarize` computes one summary per ratio from supplied observations, and
+`csf calibration select` applies the state machine. The selector reads summaries only; it loads
+no model and cannot see a prompt.
+
 **Work:** capture clean states for all 32 calibration prompts at layer 13; compute
 `reference_norm` as the median clean-state norm; for each of the five ratios set
 `alpha = ratio * reference_norm`; apply all 16 signed directions at all five ratios plus one

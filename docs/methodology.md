@@ -234,7 +234,20 @@ because filtering on clean correctness would select on model behavior.
 ratio, `alpha = ratio * median clean-state norm over the 32 calibration prompts`, applied to
 every prompt. This is a leakage decision, not a convenience one: `public_view` publishes
 `strength` to every method, so a prompt-relative strength would hand the visible-information
-baseline the prompt's state norm and contaminate the comparison the arm exists to make.
+baseline the prompt's state norm and contaminate the comparison the arm exists to make. The
+implementation carries no prompt-specific strength function at all, and
+`calibration.strength.check_global_alpha` refuses a set of observations that used more than one
+alpha at a grid point.
+
+**Calibration is a choice of stimulus, not a measurement.** Six conditions are fixed before any
+number exists: completeness (every expected observation present or its failure recorded), finite
+outputs, the no-op within the harness tolerance, at least 15 percent of non-no-op effects
+reaching 0.10, a median absolute effect of at least 0.05, and a 95th percentile of at most 4.0.
+Conditions are inclusive at the boundary. The **smallest** passing ratio wins, in preregistered
+order, never the largest effect or the most flips: choosing the stimulus by the outcome would
+make the comparison circular. Layer 13 is primary; layer 20 is reachable only when no layer-13
+ratio passes, and a passing primary layer prohibits it. Medians use `numpy.median` and
+percentiles `numpy.quantile(method="linear")`, both recorded in the plan.
 
 **Directions are constructed, not estimated.** Four centered answer-token unembedding
 directions and four seeded Gaussian controls orthogonal to their span and to each other, all

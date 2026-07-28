@@ -166,9 +166,9 @@ def directions_synthetic(
     """Create a seeded random direction for the smoke pipeline.
 
     This is not a bias direction and has passed no causal validation. It exists so the
-    plumbing can be exercised before any real direction has been estimated. Real experiments
-    use `csf directions estimate` and must validate the result against matched random
-    controls before calling it meaningful.
+    plumbing can be exercised before any real direction exists. A direction discovered from
+    data must be validated against matched random controls before it is called meaningful;
+    that discovery pipeline is not implemented, and no command in this CLI produces one.
     """
     import torch
 

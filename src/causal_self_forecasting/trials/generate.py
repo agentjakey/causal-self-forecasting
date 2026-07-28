@@ -184,8 +184,10 @@ def generate_trials(
     if not store.has(experiment.direction_id):
         raise TrialGenerationError(
             f"direction {experiment.direction_id!r} is not in {directions_dir()}; "
-            "estimate it first (`csf directions estimate`) or, for the smoke pipeline, create a "
-            "synthetic one with `csf directions synthetic`"
+            "create it first. `csf directions synthetic` builds a seeded random vector for the "
+            "smoke pipeline. Data-estimated direction discovery is not implemented yet, so a "
+            "real experiment must supply its direction by another route and record how it was "
+            "built in the direction metadata."
         )
     control_ids = _ensure_random_controls(
         store,

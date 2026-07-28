@@ -6,8 +6,9 @@
 #
 # The direction is `smoke_synthetic`, a seeded random vector created by
 # `csf directions synthetic`. It is not a bias direction and has passed no causal validation.
-# Real experiments use a direction produced by `csf directions estimate` and validated
-# against matched random controls first.
+# A real experiment needs a direction whose construction is recorded and, if it was discovered
+# from data, validated against matched random controls first. No command in this CLI produces
+# such a direction yet.
 name: smoke
 seed: 12345
 

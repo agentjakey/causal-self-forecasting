@@ -321,8 +321,8 @@ def validate_interventions(resolved: ResolvedExperiment) -> dict[str, Any]:
     if not store.has(experiment.direction_id):
         raise RuntimeError(
             f"direction {experiment.direction_id!r} is not in {directions_dir()}; "
-            "create it with `csf directions synthetic` (smoke) or "
-            "`csf directions estimate` (real runs)"
+            "create it with `csf directions synthetic` for the smoke pipeline. Data-estimated "
+            "direction discovery is not implemented yet."
         )
     direction = store.load(experiment.direction_id, dtype=model.dtype).to(model.device)
     if direction.shape[0] != model.hidden_dim:

@@ -10,6 +10,29 @@ Any change to this document after data collection begins must be recorded in the
 log at the bottom, with a date and a reason. Amendments are not misconduct. Silent
 amendments are.
 
+## Scope note, added 2026-07-27
+
+A separate experimental arm, the **BlueDot state-dependence study**, is preregistered in
+`docs/bluedot/preregistration_state_dependence.md`. That document supersedes this one **for that
+arm only**. Nothing in this document has been rewritten, and it remains in force for the broader
+CSF-Bench study it describes.
+
+Where the two disagree, the BlueDot document governs the BlueDot arm and this document governs
+everything else. The differences that matter:
+
+| Item | This document | BlueDot arm |
+| --- | --- | --- |
+| Primary outcome | answer-flip Brier | `delta_clean_top_margin`, a new target that does not redefine `delta_margin` |
+| Primary comparison | `state_mlp` versus `prompt_tfidf` | `visible_information_ridge` versus `state_bilinear_ridge`, and true state versus matched wrong state |
+| Model organism | required (LoRA, clean versus adapted) | not used; one clean pinned model |
+| State swap | same-prompt clean versus adapted | same-arm matched wrong prompt state |
+| Sample counts | 500 items, 2000 trials | 168 prompts (8 / 32 / 96 / 32) |
+| Methods | six, including a state MLP | ridge only; no MLP |
+| Split semantics | the policy in section 7, unchanged | a new `PromptRole`; `Split` semantics untouched |
+
+Sections 7 (split policy), 8 (statistical analysis), and 10 (exclusion rules) of this document are
+adopted by the BlueDot arm except where its own document states otherwise.
+
 ## 1. Research question
 
 Given a language model's internal state and a set of candidate interventions, can a
@@ -192,4 +215,13 @@ Stated up front so it cannot be renegotiated later:
 
 ## Amendment log
 
-None. The document has not been amended.
+**2026-07-27. Scope amendment, not a change to any hypothesis, outcome, comparison, decision
+rule, or planned count in this document.** A separate arm, the BlueDot state-dependence study,
+was preregistered in `docs/bluedot/preregistration_state_dependence.md` and supersedes this
+document for that arm only. Reason: the BlueDot arm asks a narrower question that needs no model
+organism, no learned behavioral direction, and no state MLP, so running it under this
+document's primary comparison would have been a silent amendment. Sections 1 through 13 here are
+unchanged. See the scope note near the top of this file for the item-by-item differences.
+
+No data had been collected under this document at the time of this amendment. No hypothesis has
+been added, removed, or reworded.

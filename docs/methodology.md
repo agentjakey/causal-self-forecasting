@@ -145,6 +145,12 @@ Every method declares what it may read. The declaration is the experiment.
 The prompt-only methods must never receive adapter identity or any state-derived feature. That
 is the leakage audit, and it is what makes the H1 comparison mean anything.
 
+Naming: the table above uses `prompt_tfidf`, which is the name in the original preregistration.
+The **implemented** method id is `prompt_lexical` (`forecasting/lexical.py`). They are the same
+method. `constant` and `prompt_lexical` are the only two rows in this table that exist in code;
+`prompt_report`, `linear_probe`, `state_mlp`, `gradient`, and `soft_token_reporter` are planned
+and not implemented.
+
 ## 7. Metrics
 
 Numeric: MAE, RMSE, Pearson, Spearman, sign accuracy, 90 percent interval coverage, interval
@@ -164,9 +170,31 @@ narrow and claim precision the data does not support.
 
 ## 8. Artifacts
 
-Each run writes `trial_manifest.jsonl`, `candidate_sets.jsonl`, `forecasts.jsonl`,
-`forecast_commitments.jsonl`, `selection_reveals.jsonl`, `observations.parquet`, `scores.json`,
-`run_manifest.json`, `environment.json`, and `artifact_hashes.json`.
+What a run actually writes, verified against `paths.py` and a real run directory:
+
+| File | Written by |
+| --- | --- |
+| `trial_manifest.jsonl` | trial generation |
+| `candidate_sets.jsonl` | trial generation |
+| `state_refs.jsonl` | trial generation |
+| `states.npz` | trial generation |
+| `run_manifest.json` | trial generation |
+| `environment.json` | trial generation |
+| `run.log.jsonl` | any command run against the run directory |
+| `forecasts.jsonl` | forecast commitment |
+| `forecast_commitments.jsonl` | forecast commitment |
+| `selection_reveals.jsonl` | resolution, forecast mode |
+| `observations.jsonl` | resolution, both modes |
+| `resolution_failures.jsonl` | resolution, when an intervention fails |
+| `resolution.json` | resolution |
+| `resolution_artifact_hashes.json` | resolution |
+| `scores.json` | scoring |
+| `score_records.jsonl` | scoring |
+
+Observations are JSONL, not parquet. Every other record in a run is line-oriented JSON, the
+volume is small, and a hashable line-oriented file needs none of the machinery a parquet writer
+would pull in. `paths.OBSERVATIONS` still names `observations.parquet` as a documented long-term
+target; nothing writes it, and no reader should look for it.
 
 Salts, private payloads, and selection seeds live in a private directory that git ignores and
 the exporter strips.
@@ -177,3 +205,50 @@ Model revisions are pinned to commit shas, never to `main`. The config hash cove
 document, so reformatting a config does not invalidate provenance but changing a setting does.
 The run manifest records the seed, the resolved device and dtype, package versions, and the git
 commit, including whether the tree was dirty.
+
+## 10. The BlueDot state-dependence arm
+
+A separate arm runs a narrower experiment on the same harness. Its design is frozen in
+`docs/bluedot/preregistration_state_dependence.md` and its execution order in
+`docs/bluedot/execution_decision_tree.md`. Only the parts that change how the harness is read
+are summarized here.
+
+**Its own target.** The arm measures `delta_clean_top_margin`, not the `delta_margin` defined in
+section 1. The existing target is unchanged and the original study continues to use it. The new
+one is defined against the model's own clean preferred answer rather than the dataset answer key:
+
+```text
+c_star                  = argmax over {A,B,C,D} of the clean label logits
+clean_top_margin        = clean_logit[c_star]      - max(clean_logit[c]      for c != c_star)
+intervened_top_margin   = intervened_logit[c_star] - max(intervened_logit[c] for c != c_star)
+delta_clean_top_margin  = intervened_top_margin - clean_top_margin
+```
+
+`c_star` is computed once from the clean run and held fixed when the intervened margin is
+computed. `clean_top_margin` is non-negative by construction, `intervened_top_margin` goes
+negative exactly when the argmax moves off `c_star`, and that coincides with the existing
+`answer_flip`. A prompt is included regardless of whether `c_star` matches the dataset answer,
+because filtering on clean correctness would select on model behavior.
+
+**Global intervention magnitude, not prompt-relative.** One absolute strength per layer and
+ratio, `alpha = ratio * median clean-state norm over the 32 calibration prompts`, applied to
+every prompt. This is a leakage decision, not a convenience one: `public_view` publishes
+`strength` to every method, so a prompt-relative strength would hand the visible-information
+baseline the prompt's state norm and contaminate the comparison the arm exists to make.
+
+**Directions are constructed, not estimated.** Four centered answer-token unembedding
+directions and four seeded Gaussian controls orthogonal to their span and to each other, all
+unit norm. Nothing is estimated from data, so section 4's causal-validation requirement for a
+*discovered* direction does not apply; these are stimuli with known construction, not claims
+about what the model represents. The family and the semantic role stay private exactly as
+section 2 requires.
+
+**All candidates resolved, no selection.** The arm forecasts and observes every candidate, so
+the single-candidate selection step in section 5 is replaced by a no-selection reveal: the salt
+is disclosed and the commitment recomputed without choosing a candidate. The blinding it relies
+on is ordering, enforced by refusing to commit once any outcome artifact exists in the run
+directory.
+
+**Aggregation.** Errors are averaged per prompt over the non-no-op interventions before any
+method is compared, and comparisons are paired bootstraps over prompt groups. This is stricter
+than section 7's grouped bootstrap, which resamples groups but computes pair-level statistics.

@@ -4,6 +4,52 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added (2026-07-27, documentation and scope only)
+
+* `docs/bluedot/current_state_audit.md`: a read-first audit of the checkout, recording verified
+  capabilities, missing capabilities, leakage and commitment-protocol risks, and eleven
+  code-versus-documentation discrepancies.
+* `docs/bluedot/preregistration_state_dependence.md`: a dated preregistration for the BlueDot
+  state-dependence arm, written before any calibration, training, or final-test run. It freezes
+  the model and revision, the 8 / 32 / 96 / 32 prompt roles, the layer and the single allowed
+  fallback, a new target `delta_clean_top_margin`, the eight-direction bank, the global
+  calibrated intervention magnitude, three ridge methods, the wrong-state control, the
+  commitment protocol, the analysis, and the predicted results. It supersedes
+  `docs/preregistration.md` **for that arm only**; the original is unedited and still governs the
+  broader CSF-Bench study.
+* `docs/bluedot/execution_decision_tree.md`: the stage-by-stage execution order with a written
+  gate at every branch point and six named stop codes.
+
+### Changed (2026-07-27)
+
+* `docs/preregistration.md`: a scope note and a dated amendment-log entry pointing at the BlueDot
+  arm. No hypothesis, outcome, comparison, decision rule, or planned count was altered.
+* `docs/build_plan.md`: phase table now records which phases are active for the BlueDot arm and
+  which are deferred; a BlueDot slice table was added; the duplicated ordering list was fixed;
+  the stale Phase 1 test count is now marked historical alongside the current 273 passed,
+  1 skipped.
+* `docs/methodology.md`: the artifact list now matches what runs actually write; the
+  `prompt_tfidf` versus implemented `prompt_lexical` naming is reconciled; a section on the
+  BlueDot arm's target, magnitude, direction construction, and aggregation was added.
+* `docs/claim_boundaries.md`: the status section no longer understates the completed real-Gemma
+  engineering validation, and a claim-boundary section for the BlueDot arm was added.
+* `docs/compute_decision.md`: corrected arithmetic for the BlueDot arm (5,072 forwards, about
+  40 minutes, about 61 with the layer-20 fallback), stating that no GPU rental and no compute
+  grant is needed. LoRA training is marked deferred for this arm.
+* `README.md`: added the BlueDot arm to the status section and corrected the quickstart, which
+  previously ended with `csf score run` immediately after a ground-truth resolve. That sequence
+  cannot work: scoring requires committed forecasts and no CLI command commits one.
+
+### Fixed (2026-07-27, message text only, no behavior change)
+
+* Removed references to `csf directions estimate`, a command that does not exist, from
+  `trials/generate.py`, `interventions/validate.py`, `cli.py`, and
+  `configs/experiments/smoke.yaml`. The messages now say what does exist and state plainly that
+  data-estimated direction discovery is not implemented.
+* Documented that runs write `observations.jsonl`, not the `observations.parquet` the methodology
+  previously listed. `paths.OBSERVATIONS` is an unused long-term target name and is now described
+  as one.
+
 ### Added
 
 * `csf trials resolve`: apply interventions and record observations for a generated trial run.

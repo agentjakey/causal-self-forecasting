@@ -5,9 +5,31 @@ set by the design rather than by whatever the numbers turn out to be.
 
 ## Current status
 
-**No experiment has been run.** There are no results. The repository contains a working
-pipeline and a smoke test on a randomly initialized fixture model, which measures nothing
-about language models.
+Last updated 2026-07-27.
+
+**No scientific result exists.** There is no model organism, no estimated and causally validated
+direction, no trained forecaster, and no verified public export.
+
+What has been completed is engineering validation, and understating it would be its own kind of
+inaccuracy. On real, pinned Gemma 3 1B weights
+(`google/gemma-3-1b-it` at `dcc83ea841ab6100d6b47a070329e1ba4cf78752`):
+
+* the systems benchmark loaded the weights, scored answer tokens, and timed forward passes on
+  CPU;
+* hook-owned capture was verified at layer 13 by patching a known vector and reading it back
+  (`capture_point_verified: true`, `max_abs_patch_error: 0.0`);
+* all five required intervention-harness controls passed;
+* ground-truth resolution applied all four candidates to an ARC item and recorded four
+  observations with the no-op reproducing the clean output exactly.
+
+None of that is a CSF-Bench result and none of it can become one: the direction used was
+synthetic and unvalidated, and single-item accuracy is a scoring smoke check. The distinction is
+enforced structurally, not by convention, and the artifacts carry it
+(`scientific_result: false` as a typed literal). The full record is in
+`docs/experiment_log.md`, entries dated 2026-07-18 and 2026-07-19.
+
+The fixture-model smoke pipeline also runs end to end in the test suite. The fixture is randomly
+initialized and measures nothing about language models.
 
 ## What the design can support
 
@@ -55,6 +77,43 @@ A strong result from the state MLP is a result about what information is present
 decodable in the residual stream. It is not a result about what the model knows about
 itself. Reporting it as the latter would be the single most likely way this project could
 mislead someone, which is why the failure mode has its own dashboard page.
+
+## The BlueDot state-dependence arm
+
+Added 2026-07-27. Design frozen in `docs/bluedot/preregistration_state_dependence.md`.
+
+This arm is an **external state-information audit**. It asks one question:
+
+> Does access to Gemma 3 1B's correct prompt-specific hidden state improve forecasts of how a
+> fixed internal intervention changes the model's clean preferred answer, beyond the prompt, the
+> clean output distribution, and a complete numerical representation of the intervention?
+
+**What a positive result would support.** That the residual stream at one layer carries
+prompt-specific information about a specified intervention's effect which is not already present
+in the visible inputs, as measured by ridge regressions we fit and control, on one model, at one
+layer, for one constructed intervention family, on 32 held-out prompts.
+
+**What a positive result would not support.** Nothing about introspection, consciousness,
+self-awareness, faithful verbal reasoning, hidden goals, deception, or deployment readiness. The
+predictors here are ridge regressions reading activations. A ridge regression is a readout, not
+a report, and the model is not doing the reporting. The distinctions in the table above apply
+with full force.
+
+**What a null result would mean.** That the state adds nothing detectable beyond a complete
+intervention description at this scale and sample size. It would not show that the information
+is absent, only that this readout at this power did not find it. The sample is 32 final-test
+prompts; the arm is not powered to make an absence claim.
+
+**Additional limits specific to this arm.** One model, one revision, one layer (with one
+preregistered fallback), one task, one neutral framing, one constructed direction family, and
+linear readouts only. The directions are built from the unembedding and from seeded randomness,
+so they are stimuli with known construction, not discovered features, and no claim about what
+the model represents follows from them. The arm uses no model organism, so it says nothing about
+detecting a planted behavior.
+
+Acceptable language for this arm: state-conditioned prediction of intervention effects,
+prompt-specific state information, external state-information audit, evidence consistent with
+prompt-specific state dependence.
 
 ## Limits of the commitment protocol
 

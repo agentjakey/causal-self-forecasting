@@ -22,6 +22,33 @@ Nothing in this repository should be read as a finding about how language models
 `docs/experiment_log.md` for exactly what has been measured and `docs/compute_decision.md` for
 what the measured forward cost implies.
 
+### Active work: the BlueDot state-dependence arm
+
+As of 2026-07-27 the active experiment is a narrower arm, preregistered before any run:
+
+> Does access to Gemma 3 1B's correct prompt-specific hidden state improve forecasts of how a
+> fixed internal intervention changes the model's clean preferred answer, beyond the prompt, the
+> clean output distribution, and a complete numerical representation of the intervention?
+
+It is an external state-information audit. It does not test introspection, consciousness,
+self-awareness, faithful verbal reasoning, hidden goals, or deployment readiness.
+
+* `docs/bluedot/preregistration_state_dependence.md` freezes the design. It supersedes
+  `docs/preregistration.md` for this arm only; the original is unedited and still governs the
+  broader study.
+* `docs/bluedot/execution_decision_tree.md` freezes the order of operations and the gate at every
+  branch point.
+* `docs/bluedot/current_state_audit.md` is the read-first audit the arm was scoped against.
+
+The arm uses one clean pinned model and no model organism, ridge regressions and no MLP, and 168
+prompts. Estimated cost is about 40 minutes of CPU forward time. **No GPU and no compute grant is
+needed.** The model organism, LoRA training, learned behavioral directions, the state MLP, the
+verbal reporter, SAE work, the 4B replication, mechanism transfer, and the dashboard are all
+deferred out of this arm's path; they remain part of the broader roadmap in
+`docs/research_plan.md`.
+
+No calibration, training, or final-test run has been executed and no result exists.
+
 ## The idea
 
 A model can explain its answer persuasively without the explanation tracking the computation
@@ -79,10 +106,14 @@ uv run csf trials generate --config configs/experiments/smoke.yaml --max-trials 
 
 # Apply interventions and record observations (ground-truth mode, all candidates)
 uv run csf trials resolve --run-id <RUN_ID> --ground-truth
-
-# Score committed forecasts against observations
-uv run csf score run --run-id <RUN_ID>
 ```
+
+`csf score run` is deliberately not in that list. It scores *committed forecasts* against
+observations and raises if a run has none, and a ground-truth resolution commits nothing. There
+is currently **no CLI command that commits a forecast**: `commit_forecasts` is reachable from
+Python only. The full generate, resolve, fit, commit, resolve, score loop is exercised end to
+end by `tests/integration/test_resolve.py::test_full_pipeline_generate_resolve_fit_commit_score`,
+which is the working example to copy until a `csf forecast` command exists.
 
 `csf doctor` reports the environment and validates every config. It does not fail because a
 GPU is missing; it says so.

@@ -2,7 +2,10 @@
 
 Living document. Status values: `not started`, `in progress`, `done`, `blocked`.
 
-Last updated: 2026-07-15.
+Last updated: 2026-07-27.
+
+The environment table below was measured on 2026-07-15 and has not been remeasured; the phase
+status and the ordering sections have been updated since.
 
 ## Environment as inspected
 
@@ -61,22 +64,26 @@ manifest, not estimated here.
 
 ## Phase status
 
-| Phase | Name | Status |
-| --- | --- | --- |
-| 0 | Scientific contract | done |
-| 1 | Repository scaffold | done |
-| 2 | Real-model harness | done, validated on real Gemma 3 1B |
-| 3 | Intervention system | done, validated on real Gemma 3 1B |
-| 4 | Trial and commitment engine | done, resolution and scoring included |
-| 5 | Benign model organism | not started |
-| 6 | Direction discovery | not started |
-| 7 | Baselines | partial: constant and prompt-only lexical done |
-| 8 | State-conditioned forecaster | not started |
-| 9 | Held-out mechanism test | not started |
-| 10 | Dashboard | not started |
-| 11 | State-conditioned verbal reporter | not started |
-| 12 | SAE extension | not started |
-| 13 | Gemma 3 4B replication | not started |
+| Phase | Name | Status | Active for the BlueDot arm? |
+| --- | --- | --- | --- |
+| 0 | Scientific contract | done | yes |
+| 1 | Repository scaffold | done | yes |
+| 2 | Real-model harness | done, validated on real Gemma 3 1B | yes |
+| 3 | Intervention system | done, validated on real Gemma 3 1B | yes |
+| 4 | Trial and commitment engine | done, resolution and scoring included | yes, with the protocol extensions in the BlueDot preregistration section 10 |
+| 5 | Benign model organism | not started | **deferred** |
+| 6 | Direction discovery | not started | **deferred**; the arm constructs directions rather than estimating them |
+| 7 | Baselines | partial: constant and prompt-only lexical done | yes, as diagnostics |
+| 8 | State-conditioned forecaster | not started | replaced for this arm by ridge methods; the state MLP is **deferred** |
+| 9 | Held-out mechanism test | not started | **deferred** |
+| 10 | Dashboard | not started | **deferred** |
+| 11 | State-conditioned verbal reporter | not started | **deferred** |
+| 12 | SAE extension | not started | **deferred** |
+| 13 | Gemma 3 4B replication | not started | **deferred** |
+
+Deferred means out of the active path for the BlueDot state-dependence arm. It does not mean
+cancelled. The original roadmap in `docs/research_plan.md` is unchanged and these phases remain
+part of the broader CSF-Bench study.
 
 ## Phase 0: Scientific contract
 
@@ -107,7 +114,8 @@ to end on CPU.
 - [x] Structured logging
 - [x] Tiny fixture model for tests, built from a real Transformers config at small size
 - [x] `csf doctor`
-- [x] pytest suite green (155 passed, 1 skipped)
+- [x] pytest suite green (155 passed, 1 skipped at the time this phase closed; the suite has
+      grown since and stands at 273 passed, 1 skipped as of 2026-07-27)
 - [x] Ruff and Pyright clean
 - [x] CI workflow
 
@@ -205,23 +213,55 @@ outcomes from the predicted split, or the correct answer.
 - [x] Leakage audit test: `TrainingExample` is asserted to carry no private field, and the
       forecaster interface rejects a declared forbidden input.
 - [ ] Prompt-only target-model report, linear state probe, state MLP, gradient baseline. Not
-      started; the state methods wait on the state-conditioning work in Phase 8.
+      started. The state MLP and the verbal reporter are deferred; the BlueDot arm uses ridge
+      methods instead (Phase B below).
 
-## Phase 5 onward
+## The active path: the BlueDot state-dependence arm
+
+As of 2026-07-27 the active work is the BlueDot state-dependence arm, preregistered in
+`docs/bluedot/preregistration_state_dependence.md` with its execution order in
+`docs/bluedot/execution_decision_tree.md`. It reuses Phases 1 through 4 and the Phase 7
+baselines, and it defers Phases 5, 6, and 8 through 13.
+
+| Slice | Deliverable | Status |
+| --- | --- | --- |
+| B0 | Preregistration and scope amendment | done, 2026-07-27 |
+| B1 | Prompt manifests: `PromptRole`, `PromptManifest`, `csf prompts manifest` | not started |
+| B2 | Direction bank and the fixed intervention projection matrix | not started |
+| B3 | Global state-relative-by-calibration strength and `norm_ratio` | not started |
+| B4 | 17-candidate and 81-candidate study candidate sets | not started |
+| B5 | Commitment-protocol hardening: extended key, no-selection reveal, pre-existing-outcome refusal | not started |
+| B6 | `StateAuditExample` and block-structured features | not started |
+| B7 | `TransformFitRecord` and fit-boundary enforcement | not started |
+| B8 | Three ridges and grouped cross-validation | not started |
+| B9 | Paired prompt bootstrap and prompt-first aggregation | not started |
+| B10 | `csf verify study` and `csf replay` | not started |
+| B11 | Smoke run (8 prompts) | not started |
+| B12 | Calibration, training, final test | not started |
+
+Compute for the whole arm is about 40 minutes of forward time on this CPU, about 61 with the
+preregistered layer-20 fallback. No GPU and no compute grant is needed. See
+`docs/compute_decision.md` section 5.
+
+The one prerequisite that is not compute: the prepared ARC dataset currently holds 20 items, and
+the arm needs at least 168 eligible groups. `csf data prepare` must be rerun at a higher
+`--max-items`, which needs network access and cannot run offline.
+
+## Phase 5 onward, deferred for the BlueDot arm
 
 Phase 5 is where the missing CUDA device starts to bind. LoRA training on CPU is classified
 insufficient evidence in `docs/compute_decision.md`; a timed micro-run is needed before it is
 treated as practical, and GPU rental should be considered there. The compute decision is the
-maintainer's.
+maintainer's. None of this blocks the BlueDot arm, which uses no adapter.
 
-Order from here:
+Order for the broader CSF-Bench study, when it resumes:
 
 1. Direction estimation with causal validation (Phase 6). The current directions are synthetic
-   and unvalidated; a real experiment needs an estimated, causally validated direction.
+   and unvalidated; the broader study needs an estimated, causally validated direction.
 2. Benign model organism (Phase 5), which needs the LoRA training decision above.
 3. The remaining baselines and the state-conditioned forecaster (Phases 7 and 8).
-4. Benign model organism (Phase 5).
-5. Direction estimation with causal validation (Phase 6).
+4. Held-out mechanism transfer (Phase 9).
+5. Dashboard, verbal reporter, SAE, and the 4B replication (Phases 10 through 13).
 
 ## Non-negotiables carried through every phase
 

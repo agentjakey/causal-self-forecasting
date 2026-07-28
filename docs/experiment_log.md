@@ -208,10 +208,67 @@ confident margin, and because the direction is not a bias direction and has pass
 validation. These numbers validate the harness end to end on real weights; they say nothing
 about the model, and they are marked non-scientific in the resolution manifest.
 
+## 2026-07-27: repository audit (documentation, no run)
+
+A read-first audit of the checkout at commit `86fb2d3`, written to
+`docs/bluedot/current_state_audit.md`. No model was loaded and no run was executed.
+
+Verified from the checkout rather than carried forward on trust: Python 3.12.13, torch
+2.13.0+cpu with CUDA unavailable, transformers 5.14.0, uv 0.11.13, the pinned Gemma revision,
+the answer token ids, and layer-13 capture at dim 1152. Offline suite: **273 passed, 1 skipped**;
+ruff, ruff format, and pyright clean; `git diff --check` clean.
+
+The audit recorded eleven code-versus-documentation discrepancies and the protocol gaps that the
+state-dependence arm has to close, the largest being that nothing currently prevents outcomes
+from existing before a forecast is committed.
+
+One arithmetic error in that audit has since been corrected: it applied the full five-ratio
+calibration grid to every prompt role and so overstated the arm's compute by about 2.7 times.
+The corrected figure is in `docs/compute_decision.md` section 5.
+
+## 2026-07-27: BlueDot state-dependence preregistration and scope amendment (not a result)
+
+**This entry records a preregistration and a scope amendment. It is not a measured result.**
+No data was prepared, no model was loaded, no direction was built, and no calibration, training,
+or final-test outcome was generated.
+
+Written:
+
+* `docs/bluedot/preregistration_state_dependence.md`, version 1.0, dated 2026-07-27. It freezes
+  the research question, the model and revision, the prompt roles and counts, the state layer and
+  its single allowed fallback, a new study target `delta_clean_top_margin` that does not redefine
+  the existing `delta_margin`, the eight-direction bank, the global calibrated intervention
+  magnitude, the three ridge methods, the wrong-state control, the commitment protocol, the
+  analysis, and a set of explicitly labeled predictions.
+* `docs/bluedot/execution_decision_tree.md`, the execution order with a written gate at every
+  branch point and six named stop codes.
+
+The new document supersedes `docs/preregistration.md` **for this arm only**. The original was
+not rewritten; it received a scope note and a dated amendment-log entry. No hypothesis, outcome,
+comparison, decision rule, or planned count in the original was altered, and no data had been
+collected under it.
+
+Scope moved out of the active path for this arm, and deferred rather than cancelled: the model
+organism, LoRA training, learned clean-versus-adapted directions, the evaluation-versus-deployment
+hypothesis, the state MLP, the verbal reporter, SAE work, the Gemma 3 4B replication,
+held-out-mechanism transfer, the dashboard, and GPU rental.
+
+Planned compute for the arm, arithmetic on the measured median forward time of 0.474158 s from
+the 2026-07-18 systems benchmark: 5,072 forwards, about 40 minutes, plus about 21 minutes if the
+preregistered layer-20 fallback triggers. No GPU and no compute grant is needed.
+
+The predictions recorded before calibration live in section 12 of the preregistration and are
+deliberately not repeated here, so that this log cannot be misread as containing results.
+
+Offline suite after the documentation changes: **273 passed, 1 skipped**; ruff, ruff format, and
+pyright clean.
+
 ## Next entry
 
-The next scientific step needs a validated direction and a model organism, both of which are
-out of scope for now. The immediate open work is the remaining baselines (linear state probe,
-state MLP, gradient) and the direction-estimation pipeline. No CSF-Bench scientific result
-exists yet, and none should be reported until a validated direction and a real comparison
-exist.
+The next step is implementation slice B1 in `docs/build_plan.md`: prompt manifests. It needs no
+model. The one prerequisite that is not compute is rerunning `csf data prepare` at a higher
+`--max-items`, because the prepared dataset holds 20 items and the arm needs at least 168
+eligible groups; that requires network access.
+
+No CSF-Bench scientific result exists yet, and none should be reported until a real comparison
+has been run and verified.

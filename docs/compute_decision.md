@@ -109,6 +109,52 @@ forward passes; they run on the recorded observations.
 Classification: **practical on CPU**, at the 12-hour threshold used in the artifact. GPU
 rental is not required for the 1B MVP sweep, though it would shorten iteration.
 
+### 5. BlueDot state-dependence arm
+
+Added 2026-07-27. Design frozen in `docs/bluedot/preregistration_state_dependence.md`.
+
+This arm is not a scaled-down version of the MVP sweep; it has a different shape. One clean
+capture forward per prompt, then one forward per candidate. Candidate counts differ by role: 17
+at smoke, training, and final test (8 directions x 2 signs, plus a no-op), and 81 at calibration
+(5 ratios x 16 signed directions, plus a no-op), because only calibration sweeps the ratio grid.
+
+```text
+smoke        =  8 x (1 + 17) =   144
+calibration  = 32 x (1 + 81) = 2,624
+training     = 96 x (1 + 17) = 1,728
+final test   = 32 x (1 + 17) =   576
+total                        = 5,072
+
+cpu_seconds  = 5,072 x 0.474158 = 2,404.9 s = 40.1 min
+```
+
+**Planned forward time is approximately 40 minutes**, before model loading, serialization, and
+verification.
+
+The preregistered layer-20 fallback repeats calibration only, at the same layer count and the
+same grid:
+
+```text
+2,624 x 0.474158 = 1,244.2 s = 20.7 min
+```
+
+**approximately 21 additional minutes**, for a worst case of about 61 minutes.
+
+Applying the long-prompt band from the cross-cutting factors below (1.5 to 2 times `T`) gives
+roughly 40 to 80 minutes without the fallback and 61 to 122 minutes with it.
+
+Nothing else in the arm costs a forward pass. The three ridge models, the grouped
+cross-validation over the 96 training prompts, the matched wrong-state control, the ten
+permutation controls, and the 10,000-resample paired bootstrap all run on recorded observations
+and stored states. Storage is under 1 MB per captured layer for all 168 prompts.
+
+Classification: **practical on CPU**, by a wide margin. **No GPU rental and no compute grant is
+needed for this arm.**
+
+This estimate supersedes the compute figure in `docs/bluedot/current_state_audit.md` section 15,
+which applied the full five-ratio grid to every role and therefore overstated the cost by about
+2.7 times.
+
 ## Cross-cutting factors
 
 **Uncertainty from a small timing sample.** The median rests on three timed forwards of a
@@ -132,7 +178,11 @@ state shards. Observations and scores are small JSON. This grows with prompts ti
 would need reconsidering for many-layer captures or larger models, but it is not a constraint
 for the 1B MVP.
 
-## LoRA training is the open question
+## LoRA training is the open question, and it is deferred
+
+Deferred as of 2026-07-27 for the BlueDot state-dependence arm, which uses no model organism and
+therefore trains no adapter. The analysis below stands unchanged for the original CSF-Bench
+study, where the question is still open.
 
 The benchmark artifact reports `lora_estimated_cpu_hours` of about 2.37 h and marks LoRA
 training practical on CPU. That figure approximates a training step as three forward passes,
@@ -154,10 +204,13 @@ practical. This is out of scope now and no such run has been done.
 | 20-item four-candidate smoke run | practical on CPU |
 | 100-prompt clean and adapted | practical on CPU |
 | MVP sweep (2000 prompts) | practical on CPU |
-| LoRA training on CPU | insufficient evidence |
+| **BlueDot state-dependence arm (168 prompts, 5,072 forwards)** | **practical on CPU, about 40 min, no GPU needed** |
+| **BlueDot arm with the layer-20 fallback (7,696 forwards)** | **practical on CPU, about 61 min, no GPU needed** |
+| LoRA training on CPU | insufficient evidence, and deferred |
 
-The clean and intervention validation work is comfortably within CPU reach on this machine.
-The one place the evidence runs out is LoRA training, which is what the model organism will
-need. That is the point where a timed micro-run, and then possibly GPU rental, should be
-considered. The compute decision itself remains the maintainer's; this record only lays out
+The clean and intervention validation work is comfortably within CPU reach on this machine, and
+the BlueDot arm is the cheapest run this record has estimated. The one place the evidence runs
+out is LoRA training, which is what the model organism will need. That is the point where a
+timed micro-run, and then possibly GPU rental, should be considered, and it is deferred out of
+the active path. The compute decision itself remains the maintainer's; this record only lays out
 what the one measured forward time implies.

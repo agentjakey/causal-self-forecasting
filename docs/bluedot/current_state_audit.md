@@ -5,7 +5,15 @@ study continues. No scientific code was modified. No calibration, training, or f
 experiment was run. Every claim below was confirmed against the checkout on the date of this
 audit; nothing is carried forward on trust from an earlier report.
 
-Audit date: 2026-07-27.
+Audit date: 2026-07-27. Audited commit: `86fb2d38b1f24f316aaa8b4e6b0abd57cf9ccd47`.
+
+**Follow-up, same day.** The scope decisions this audit was written to inform have since been
+frozen in `docs/bluedot/preregistration_state_dependence.md`, with the execution order in
+`docs/bluedot/execution_decision_tree.md`. Where the two disagree, the preregistration governs.
+Three things in this audit have been superseded or corrected in place, each marked at its
+location: the compute arithmetic in section 15 (overstated by about 2.7 times), leakage risk R1
+in section 11 (resolved by a design decision rather than left open), and one wrong file
+attribution in discrepancy D1. Discrepancies D1, D2, and D9 have been fixed in the repository.
 
 ## 1. Exact branch and commit
 
@@ -427,11 +435,20 @@ strength encodes the state norm, and the "visible information only" method silen
 state-derived feature. The comparison the study exists to make would be contaminated at the
 source.
 
-Mitigation, and it must be decided before any calibration run: publish `norm_ratio` as the
-public scalar and keep the absolute `alpha` in the private payload alongside the direction. The
-`InterventionSpec` still records `strength` for reproduction, but `public_view` must expose the
-ratio, not the alpha. Add an explicit test asserting `public_view` never returns a value that
-varies with the prompt's state norm.
+**Resolved 2026-07-27 by a design decision, not by a mitigation.** The preregistration prohibits
+prompt-specific state-relative strengths outright. One global absolute strength
+`alpha = ratio * median clean-state norm over the 32 calibration prompts` is applied to every
+prompt at a given layer and ratio. A global alpha is identical across prompts, so publishing
+`strength` carries zero prompt-specific state information, and the visible-information ridge
+stays honest by construction rather than by a filter someone has to remember. The calibration
+prompts are disjoint from training and final test, so even the aggregate norm does not cross a
+role boundary.
+
+The residual obligation is still real and is carried into the plan: `InterventionSpec` must
+record `norm_ratio` alongside `strength` for reproduction, and a test must assert that
+`public_view` never returns a value that varies with the prompt's state norm. That test is
+cheap and it is what keeps a future prompt-relative variant from reintroducing the leak
+silently.
 
 **R2. `check_no_leakage` blocks the study's own methods.**
 `forecasting/base.py:check_no_leakage` raises `LeakageError` for any method declaring
@@ -601,30 +618,40 @@ All arithmetic below derives from one measured value: the median CPU forward tim
 `results/runs/benchmark-gemma3_1b_it-20260718T040531Z/benchmark.json`. These are **estimates,
 not measurements of the study**. No study run has been executed.
 
-Intervention count per prompt: 8 directions x 2 signs x 5 norm ratios = 80, plus 1 no-op = **81**.
-Forwards per prompt: 1 clean capture forward + 81 intervened forwards = **82**.
+**Corrected 2026-07-27.** The original version of this section applied the full five-ratio grid
+to every prompt role. That is wrong: only calibration sweeps the ratio grid. Smoke, training, and
+final test run at the single selected ratio, so they carry 17 candidates per prompt, not 81. The
+error overstated the arm's cost by about 2.7 times. The corrected figures below are the ones the
+preregistration and `docs/compute_decision.md` section 5 use.
 
-| Role | Prompts | Forwards | Estimated CPU seconds | Estimated CPU hours |
-| --- | --- | --- | --- | --- |
-| Smoke | 8 | 656 | 311 | 0.09 |
-| Calibration | 32 | 2,624 | 1,244 | 0.35 |
-| Training | 96 | 7,872 | 3,732 | 1.04 |
-| Final test | 32 | 2,624 | 1,244 | 0.35 |
-| **Total** | **168** | **13,776** | **6,532** | **1.81** |
+Candidates per prompt: 8 directions x 2 signs = 16, plus 1 no-op = **17** at smoke, training, and
+final test; 5 ratios x 16 = 80 plus 1 no-op = **81** at calibration only.
+Forwards per prompt: 1 clean capture forward plus one per candidate.
+
+| Role | Prompts | Candidates | Forwards | Estimated CPU seconds | Estimated minutes |
+| --- | --- | --- | --- | --- | --- |
+| Smoke | 8 | 17 | 144 | 68 | 1.1 |
+| Calibration | 32 | 81 | 2,624 | 1,244 | 20.7 |
+| Training | 96 | 17 | 1,728 | 819 | 13.7 |
+| Final test | 32 | 17 | 576 | 273 | 4.6 |
+| **Total** | **168** | | **5,072** | **2,405** | **40.1** |
+
+A layer-20 fallback repeats calibration only: 2,624 further forwards, 1,244 s, about 21 minutes,
+for a worst case near 61 minutes.
 
 Excluded from the table and real: about 48 s of model load per process (measured, same
 artifact), and roughly 1.5 percent capture overhead per captured forward (measured, same
 artifact). The compute-decision record warns that the timing sample is three forwards of one
 53-token prompt, and that long-prompt-heavy runs may cost 1.5 to 2 times T. Applying that band
-puts the study at roughly 1.8 to 3.6 CPU hours.
+puts the study at roughly 40 to 80 minutes, or 61 to 122 minutes with the fallback.
 
 The three ridge models, the grouped cross-validation, the wrong-state control, and the bootstrap
 add no forward passes; they run on recorded observations and stored states. Storage is
 negligible: 168 prompts x 1152 float32 values per captured layer is under 1 MB per layer.
 
-**Conclusion: no GPU is required.** The study is comfortably within CPU reach on this machine,
-by the same 12-hour threshold the existing compute decision uses. GPU rental should be moved to
-deferred work (section 17).
+**Conclusion: no GPU and no compute grant is required.** The study is comfortably within CPU
+reach on this machine, by the same 12-hour threshold the existing compute decision uses. GPU
+rental should be moved to deferred work (section 17).
 
 One prerequisite is not compute: only **20 ARC items and 160 variants** are currently prepared
 (`data/manifests/arc_mcq.json`, `item_splits: {train: 12, val: 3, test: 5}`). The study needs 168
@@ -639,22 +666,27 @@ Recorded here rather than fixed, in line with the read-first scope of this pass.
 
 | # | Discrepancy | Evidence |
 | --- | --- | --- |
-| D1 | `csf directions estimate` does not exist but is cited as the real-run path. | `trials/generate.py:187`, `interventions/validate.py:324-325`, `cli.py:170`, `docs/build_plan.md` Phase 7 note. `csf directions --help` lists only `synthetic`. |
-| D2 | `docs/methodology.md` section 8 says runs write `observations.parquet`. They write `observations.jsonl`. | `paths.py:19-24` (the constant is unused and the comment says so); `results/runs/gemma-harness/` contains `observations.jsonl`. |
-| D3 | The methodology artifact list omits seven files real runs write. | Section 14, A3. |
+| D1 | `csf directions estimate` does not exist but is cited as the real-run path. **Fixed 2026-07-27** in all four places. | `trials/generate.py:187`, `interventions/validate.py:324-325`, `cli.py:170`, `configs/experiments/smoke.yaml:9`. `csf directions --help` lists only `synthetic`. The audit's original attribution of a fourth reference to `docs/build_plan.md` was wrong; that file describes direction estimation as a phase but never names the command. |
+| D2 | `docs/methodology.md` section 8 says runs write `observations.parquet`. They write `observations.jsonl`. **Fixed 2026-07-27.** | `paths.py:19-24` (the constant is unused and the comment says so); `results/runs/gemma-harness/` contains `observations.jsonl`. |
+| D3 | The methodology artifact list omits seven files real runs write. **Fixed 2026-07-27.** | Section 14, A3. |
 | D4 | `docs/preregistration.md` and `docs/methodology.md` name the prompt-only baseline `prompt_tfidf`; the implemented method id is `prompt_lexical`. | `forecasting/lexical.py:27`. |
 | D5 | `docs/preregistration.md` and `docs/methodology.md` name `state_mlp` as the primary method; it does not exist. | `forecasting/__init__.py` exports two baselines. |
 | D6 | `docs/build_plan.md` header says "Last updated: 2026-07-15" but the file describes work logged on 2026-07-18 and 2026-07-19. | `docs/build_plan.md:5` versus lines 134-135. |
 | D7 | `docs/build_plan.md` Phase 1 records "pytest suite green (155 passed, 1 skipped)". Current is 273 passed, 1 skipped. Historically true for that phase, misleading as a current statement. | Section 4. |
 | D8 | `docs/build_plan.md` "Order from here" lists direction estimation twice (items 1 and 5) and the model organism twice (items 2 and 4). | `docs/build_plan.md:217-224`. |
-| D9 | The README quickstart runs `csf score run --run-id <RUN_ID>` immediately after a ground-truth resolve. `score_run` raises `ScoringError` when no forecasts are committed, so that sequence fails as written. | `README.md:80-85` versus `scoring/run.py:123-125`. |
+| D9 | The README quickstart runs `csf score run --run-id <RUN_ID>` immediately after a ground-truth resolve. `score_run` raises `ScoringError` when no forecasts are committed, so that sequence fails as written, and no CLI command commits a forecast. **Fixed 2026-07-27.** | `README.md:80-85` versus `scoring/run.py:123-125`. |
 | D10 | `ExperimentConfig.candidates_per_trial` is validated (`ge=2, le=8`) but never read. Candidate count is fixed at four by `default_templates`. The study needs 81 candidates, so this field is both dead and, if revived, wrongly bounded. | `config.py:152`; no consumer in `src/`. |
 | D11 | `docs/claim_boundaries.md` "Current status" says "No experiment has been run" and describes the repository as containing "a smoke test on a randomly initialized fixture model". Real-Gemma systems and harness validation have since run. The statement is still true about scientific results but understates what exists. | `docs/claim_boundaries.md:6-10` versus `docs/experiment_log.md` 2026-07-18 and 2026-07-19. |
 
-**No documentation file was modified in this pass.** Each discrepancy above is recordable without
-correcting the source document, so the exception for directly contradictory statements was not
-triggered. D1, D2, and D9 are the three that should be fixed first when documentation work is in
-scope, because each one sends a reader to run something that does not work.
+**No documentation file was modified in the audit pass itself.** Each discrepancy above was
+recordable without correcting the source document, so the exception for directly contradictory
+statements was not triggered.
+
+**Follow-up, 2026-07-27.** In the subsequent scope-and-preregistration pass, D1, D2, D3, and D9
+were fixed, and D6, D7, D8, and D11 were addressed in `docs/build_plan.md` and
+`docs/claim_boundaries.md`. D4 and D5 were reconciled by a naming note in `docs/methodology.md`
+rather than by renaming anything in code. D10 remains open and is listed as a required change in
+the preregistration's schema-conflict table (S6).
 
 ## 17. Smallest ordered implementation plan
 

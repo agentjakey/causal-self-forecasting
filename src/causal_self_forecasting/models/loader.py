@@ -7,6 +7,7 @@ use would be worse than no manifest at all.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -29,6 +30,25 @@ from .fixture import FIXTURE_REVISION, build_fixture, fixture_dir
 
 class ModelLoadError(RuntimeError):
     """Raised when a model cannot be loaded as specified."""
+
+
+@dataclass(frozen=True)
+class OutputEmbedding:
+    """The output-embedding matrix, with enough provenance to cite it.
+
+    `revision` is carried so that a direction built from these rows can name the exact weights
+    it came from. The matrix is not copied; it is the live parameter, so callers must not
+    mutate it.
+    """
+
+    weight: torch.Tensor
+    source: str
+    tied: bool
+    config_tie_word_embeddings: bool | None
+    vocab_size: int
+    hidden_dim: int
+    model_id: str
+    revision: str
 
 
 @dataclass(frozen=True)
@@ -69,6 +89,96 @@ class LoadedModel:
                 f"{type(self.model).__name__} does not expose model.model.embed_tokens"
             )
         return embed
+
+    def output_embedding(self, required_token_ids: Sequence[int] = ()) -> OutputEmbedding:
+        """The output-embedding weight matrix, validated.
+
+        Reads the already-loaded model. There is deliberately no second loading path here: a
+        direction built from weights loaded by different code than the run that uses it could
+        cite a revision it never actually read.
+
+        `get_output_embeddings()` is the documented accessor and is preferred. The tied input
+        embedding is used only when the model exposes no output embedding at all, and tying is
+        then reported as a fact read off the loaded tensors rather than trusted from the
+        config, because a config flag and the weights actually in memory can disagree.
+
+        Finiteness is checked on the rows in `required_token_ids` rather than on the whole
+        matrix. A full check on a 262144 x 1152 matrix would allocate hundreds of megabytes to
+        validate values no caller reads; the rows that are read are checked exactly.
+        """
+        inner = cast(Any, self.model)
+        output_module = None
+        getter = getattr(inner, "get_output_embeddings", None)
+        if callable(getter):
+            output_module = getter()
+
+        input_module = None
+        input_getter = getattr(inner, "get_input_embeddings", None)
+        if callable(input_getter):
+            input_module = input_getter()
+
+        output_weight = getattr(output_module, "weight", None)
+        input_weight = getattr(input_module, "weight", None)
+
+        if output_weight is not None:
+            weight = output_weight
+            source = "get_output_embeddings"
+        elif input_weight is not None:
+            weight = input_weight
+            source = "tied_input_embeddings"
+        else:
+            raise ModelLoadError(
+                f"{type(self.model).__name__} exposes neither an output embedding with a "
+                "weight matrix nor an input embedding to fall back on; this architecture needs "
+                "an explicit mapping before answer-token directions can be built from it"
+            )
+
+        if not isinstance(weight, torch.Tensor):
+            raise ModelLoadError(f"the {source} weight is a {type(weight).__name__}, not a tensor")
+        if weight.ndim != 2:
+            raise ModelLoadError(
+                f"the {source} weight must be 2-D (vocab, hidden), got shape {tuple(weight.shape)}"
+            )
+
+        vocab_size, hidden = int(weight.shape[0]), int(weight.shape[1])
+        if hidden != self.hidden_dim:
+            raise ModelLoadError(
+                f"the {source} weight has hidden axis {hidden} but the loaded model reports "
+                f"hidden_dim {self.hidden_dim}; the matrix is not the unembedding for these "
+                "weights, or the axes are transposed"
+            )
+
+        for token_id in required_token_ids:
+            if not 0 <= int(token_id) < vocab_size:
+                raise ModelLoadError(
+                    f"token id {token_id} is outside the {source} vocabulary axis of {vocab_size}"
+                )
+            row = weight[int(token_id)]
+            if not bool(torch.isfinite(row).all()):
+                raise ModelLoadError(
+                    f"the {source} row for token id {token_id} contains non-finite values"
+                )
+
+        # Read tying off the tensors, not off the config. Both are recorded so a disagreement
+        # is visible rather than silently resolved in favour of whichever was consulted.
+        tied = (
+            output_weight is not None
+            and input_weight is not None
+            and output_weight.shape == input_weight.shape
+            and output_weight.data_ptr() == input_weight.data_ptr()
+        )
+        declared = getattr(getattr(self.model, "config", None), "tie_word_embeddings", None)
+
+        return OutputEmbedding(
+            weight=weight,
+            source=source,
+            tied=tied,
+            config_tie_word_embeddings=None if declared is None else bool(declared),
+            vocab_size=vocab_size,
+            hidden_dim=hidden,
+            model_id=self.spec.model_id,
+            revision=self.spec.revision,
+        )
 
 
 def _read_shape(model: PreTrainedModel) -> tuple[int, int]:

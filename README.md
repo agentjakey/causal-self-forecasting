@@ -65,6 +65,28 @@ suit a result. Rerunning leaves an identical manifest byte-identical rather than
 and a manifest that differs is refused unless `--force` is passed. Committing the manifest is
 what freezes the split; see `docs/experiment_log.md` for the hashes.
 
+The direction family is frozen too: eight unit directions at
+`data/direction_manifests/bluedot_state_dependence_directions_v1.json`, four centered
+answer-token unembedding directions and four seeded controls orthogonal to their span and to
+each other. Building them reads the pinned model's output embedding and nothing else, and runs
+no prompt.
+
+```powershell
+uv run csf directions build-family --config configs/directions/bluedot_state_dependence.yaml
+uv run csf directions verify-family --manifest-id bluedot_state_dependence_directions_v1
+uv run csf directions verify-family --manifest-id bluedot_state_dependence_directions_v1 --regenerate
+```
+
+`verify-family` without `--regenerate` loads no model: it checks the manifest's own hash, every
+stored vector's content hash, dimensions, norms, orthogonality, and family completeness. With
+`--regenerate` it rebuilds all eight from the pinned weights and compares, writing nothing.
+
+**Constructing a direction is not validating one.** These are stimuli with a recorded recipe.
+Their artifacts carry `validated: false`, and nothing about them licenses calling any direction
+meaningful, load-bearing, or bias-related. The stored ids are opaque hash prefixes and the
+mapping to construction roles lives only in the private manifest, so a forecaster cannot read
+family membership off an id.
+
 ## The idea
 
 A model can explain its answer persuasively without the explanation tracking the computation
@@ -118,6 +140,10 @@ uv run csf data prepare --config configs/tasks/arc_mcq.yaml --max-items 20
 # Freeze the BlueDot prompt split (offline, no model, no forward pass)
 uv run csf prompts manifest --config configs/prompts/bluedot_state_dependence.yaml
 uv run csf prompts verify --manifest-id bluedot_state_dependence_v1
+
+# Build the BlueDot direction family (loads the pinned model's unembedding; runs no prompt)
+uv run csf directions build-family --config configs/directions/bluedot_state_dependence.yaml
+uv run csf directions verify-family --manifest-id bluedot_state_dependence_directions_v1
 
 # Smoke pipeline on the fixture model, offline
 uv run csf directions synthetic --config configs/experiments/smoke.yaml

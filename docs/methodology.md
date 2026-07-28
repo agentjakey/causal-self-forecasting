@@ -243,6 +243,29 @@ unit norm. Nothing is estimated from data, so section 4's causal-validation requ
 about what the model represents. The family and the semantic role stay private exactly as
 section 2 requires.
 
+Provenance for that family, as built (`interventions/direction_family.py`):
+
+* `d_c = normalize(w_c - mean(w_j for j != c))` over the output-embedding rows for the resolved
+  answer tokens. Answer token ids always come from the existing scoring path; a config may pin
+  expected ids, and a mismatch refuses the build rather than proceeding against different
+  tokens.
+* The four raw centered directions sum to zero, so the answer family spans at most three
+  dimensions and its members are linearly dependent. That is expected, is recorded as an
+  effective rank, and is not treated as an error.
+* The span basis is a deterministic two-pass modified Gram-Schmidt in fixed label order, not a
+  QR or SVD: those can choose different bases and signs for a rank-deficient input across
+  library versions, which would break regeneration.
+* Controls are drawn from a seeded PCG64 generator, projected off the answer span and off each
+  other twice, redrawn if the residual falls below a frozen tolerance, sign-canonicalized on
+  their first significant component, and unit-normalized. The seed derives from the master
+  seed together with the study id, family id, model id, pinned revision, and algorithm version.
+* Construction and validation run in float64; artifacts are stored as float32.
+* Stored ids are opaque hash prefixes and the family is ordered by id, so neither the string nor
+  the position encodes a construction role. The role mapping lives only in the private family
+  manifest, and the `.npz` metadata in the payload store carries no role, label, or family term.
+* The family is verifiable two ways: against the stored artifacts with no model loaded, and by
+  regenerating every vector from the pinned weights and comparing content hashes.
+
 **All candidates resolved, no selection.** The arm forecasts and observes every candidate, so
 the single-candidate selection step in section 5 is replaced by a no-selection reveal: the salt
 is disclosed and the commitment recomputed without choosing a candidate. The blinding it relies

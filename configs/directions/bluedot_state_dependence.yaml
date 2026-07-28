@@ -1,0 +1,40 @@
+# Direction family for the BlueDot state-dependence arm.
+#
+# Preregistered in docs/bluedot/preregistration_state_dependence.md section 7.1. Changing any
+# value here changes the family hash and therefore the stimuli, so a change is an amendment to
+# that document and must be recorded in its amendment log.
+#
+# Eight unit directions: four centered answer-token unembedding directions and four seeded
+# Gaussian controls orthogonal to their span and to each other. Building them reads the pinned
+# model's output embedding and nothing else. No prompt is run, no state is captured, and no
+# intervention is applied. This is construction, not causal validation.
+name: bluedot_state_dependence_directions
+family_id: bluedot_state_dependence_directions_v1
+study_id: bluedot_state_dependence
+
+model_ref: configs/models/gemma3_1b_it.yaml
+
+# Stored direction ids are `{prefix}.{16 hex}`. The hex is a hash of the construction inputs,
+# so the id is stable across rebuilds and tells a reader nothing about which family a direction
+# belongs to. The private mapping lives only in the family manifest.
+direction_id_prefix: bd1
+
+answer_labels: ["A", "B", "C", "D"]
+# Matches the scoring path: most tokenizers encode " A" and "A" as different tokens, and the
+# prompt ends in "Answer:".
+label_prefix: " "
+
+# Assertions, not inputs. The ids are always resolved through the tokenizer at build time; if
+# what the tokenizer produces differs from these, the build refuses rather than building
+# directions that point at different tokens than the study preregistered.
+expected_token_ids:
+  A: 562
+  B: 603
+  C: 565
+  D: 622
+expected_hidden_dim: 1152
+
+# The master study seed. The control seed is derived from it together with the study id, the
+# family id, the model id, the pinned revision, and the random-algorithm version.
+master_seed: 20260727
+random_control_count: 4

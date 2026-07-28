@@ -155,6 +155,45 @@ class PromptManifestConfig(Base):
         return sum(self.role_counts.values())
 
 
+class DirectionFamilyConfig(Base):
+    """How to construct one direction family from a pinned model's output embedding.
+
+    `expected_token_ids` and `expected_hidden_dim` are assertions, not inputs. The token ids are
+    always resolved through the tokenizer at build time; these values only decide whether the
+    build is allowed to proceed. Writing them here rather than in code means a tokenizer change
+    stops the build loudly instead of silently producing directions for different tokens.
+    """
+
+    name: str
+    family_id: str
+    study_id: str
+    model_ref: str
+    direction_id_prefix: str = Field(min_length=1, max_length=16)
+    answer_labels: list[str] = Field(default=["A", "B", "C", "D"], min_length=4, max_length=4)
+    label_prefix: str = " "
+    expected_token_ids: dict[str, int] = Field(default_factory=dict)
+    expected_hidden_dim: int | None = Field(default=None, gt=0)
+    master_seed: int
+    random_control_count: int = Field(default=4, ge=1, le=32)
+
+    @model_validator(mode="after")
+    def _check_expectations(self) -> DirectionFamilyConfig:
+        if self.expected_token_ids:
+            unknown = sorted(set(self.expected_token_ids) - set(self.answer_labels))
+            if unknown:
+                raise ValueError(f"expected_token_ids names labels that are not answers: {unknown}")
+            missing = sorted(set(self.answer_labels) - set(self.expected_token_ids))
+            if missing:
+                raise ValueError(
+                    f"expected_token_ids must cover every answer label or none; missing {missing}"
+                )
+            if len(set(self.expected_token_ids.values())) != len(self.expected_token_ids):
+                raise ValueError("expected_token_ids assigns the same id to two labels")
+        if len(set(self.answer_labels)) != len(self.answer_labels):
+            raise ValueError("answer_labels must be unique")
+        return self
+
+
 class InterventionConfig(Base):
     """A grid of interventions for one mechanism."""
 

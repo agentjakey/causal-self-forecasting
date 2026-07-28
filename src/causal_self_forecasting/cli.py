@@ -90,7 +90,7 @@ def doctor() -> None:
         "devices": available_devices(),
     }
 
-    from .config import InterventionConfig, PromptManifestConfig
+    from .config import DirectionFamilyConfig, InterventionConfig, PromptManifestConfig
 
     config_types: list[tuple[str, type]] = [
         ("configs/models", ModelConfig),
@@ -98,6 +98,7 @@ def doctor() -> None:
         ("configs/experiments", ExperimentConfig),
         ("configs/interventions", InterventionConfig),
         ("configs/prompts", PromptManifestConfig),
+        ("configs/directions", DirectionFamilyConfig),
     ]
 
     results: dict[str, Any] = {}
@@ -303,6 +304,82 @@ def directions_synthetic(
             "validated": False,
         }
     )
+
+
+@directions_app.command("build-family")
+def directions_build_family(
+    config: Path = typer.Option(..., "--config", help="Path to a direction-family config."),
+    force: bool = typer.Option(
+        False, "--force", help="Replace an existing, different family at the same manifest path."
+    ),
+) -> None:
+    """Construct the study's direction family from the pinned model's output embedding.
+
+    Reads the unembedding rows for the answer tokens and nothing else. No prompt is run, no
+    state is captured, and no intervention is applied.
+
+    This is construction, not causal validation. The directions are stimuli with a recorded
+    recipe, and their artifacts are marked `validated: false`. Nothing here licenses describing
+    any of them as meaningful or bias-related.
+
+    Rerunning with identical inputs leaves an identical manifest untouched. A different family
+    at the same path is refused unless force is passed.
+    """
+    from .interventions.direction_family import DirectionFamilyError, build_family_command
+
+    try:
+        report = build_family_command(config, force=force)
+    except DirectionFamilyError as error:
+        typer.secho(f"direction family failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+
+    if not report["artifact_verification"]["valid"]:
+        typer.secho(
+            f"the stored artifacts did not verify: {report['artifact_verification']['failures']}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@directions_app.command("verify-family")
+def directions_verify_family(
+    manifest_id: str = typer.Option(..., "--manifest-id", help="Direction family id to verify."),
+    regenerate: bool = typer.Option(
+        False,
+        "--regenerate",
+        help="Also rebuild every direction from the pinned model and compare. Loads the model.",
+    ),
+    config: Path | None = typer.Option(
+        None, "--config", help="Config to regenerate from. Defaults to the one the manifest cites."
+    ),
+) -> None:
+    """Verify a built direction family.
+
+    Without `--regenerate` this loads no model: it checks the manifest's own content hash, the
+    presence and content hash of every stored vector, dimensions, norms, orthogonality, and
+    family completeness. With `--regenerate` it additionally rebuilds all eight directions from
+    the pinned weights and compares them, writing nothing.
+    """
+    from .interventions.direction_family import DirectionFamilyError, verify_family_command
+
+    try:
+        report = verify_family_command(manifest_id, regenerate=regenerate, config_path=config)
+    except DirectionFamilyError as error:
+        typer.secho(f"direction family failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+
+    if not report["valid"]:
+        typer.secho(
+            f"direction family {manifest_id} did not verify",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 @interventions_app.command("validate")

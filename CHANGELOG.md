@@ -4,6 +4,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added (2026-07-27, BlueDot slice B2a: the deterministic direction family)
+
+* `LoadedModel.output_embedding()`: the smallest safe accessor for the output-embedding matrix,
+  reading the already-loaded model rather than adding a second loading path. It prefers the
+  documented `get_output_embeddings()`, falls back to the input embedding only when no output
+  embedding exists, checks that the matrix is 2-D with a hidden axis matching the loaded model,
+  checks that every required token id is in range with finite values, and reports tying as a
+  fact read off the tensors rather than trusted from the config. Both the observed and the
+  declared tying status are recorded so a disagreement is visible.
+* `DirectionConstructionRole`, `DirectionTolerances`, `DirectionEntry`,
+  `DirectionFamilyDiagnostics`, and `DirectionFamilyRecord`. The record recomputes its own
+  content hash on load, so an edited or reordered manifest fails to parse. The hash covers
+  identity, provenance, and per-vector content hashes; it excludes creation metadata, the
+  config path, the raw float diagnostics, and the `.npz` container hashes, which depend on the
+  archive writer rather than on the numbers.
+* `interventions/direction_family.py`: four centered answer-token directions
+  (`d_c = normalize(w_c - mean(w_j for j != c))`), a deterministic two-pass modified
+  Gram-Schmidt basis for their span, and four seeded PCG64 Gaussian controls projected off that
+  span and off each other, redrawn if degenerate, sign-canonicalized, and unit-normalized.
+  Construction and validation run in float64; artifacts are stored as float32 through the
+  existing `DirectionStore`. Modified Gram-Schmidt is used rather than QR or SVD because the
+  answer family is rank-deficient by construction and those routines can pick different bases
+  and signs across library versions.
+* `csf directions build-family` and `csf directions verify-family`, the latter with an
+  artifact-only level that loads no model and an optional `--regenerate` level that rebuilds
+  every direction from the pinned weights and writes nothing.
+* `DirectionFamilyConfig` and `configs/directions/bluedot_state_dependence.yaml`. Answer token
+  ids are always resolved through the existing scoring path; the config's `expected_token_ids`
+  are assertions that refuse the build on mismatch. `csf doctor` now validates
+  `configs/directions`.
+* `paths.direction_manifests_dir` and `paths.direction_manifest_path`.
+* 74 offline tests covering the accessor, token-id resolution and refusal, the centering
+  formula, the sum-to-zero property, rank handling, Gram-Schmidt determinism, seeded control
+  determinism, orthogonality, sign canonicalization, degenerate-draw redraw, hash sensitivity,
+  schema round-trip and tamper evidence, atomic generation, overwrite refusal, artifact and
+  regeneration verification, the CLI, and the privacy boundary.
+
+### Fixed (2026-07-27)
+
+* Direction `.npz` metadata no longer carries the construction-algorithm version. Its name
+  contains `answer_token_centered`, which would have put a family-role term into the payload
+  store that resolution reads from. The algorithm version is recorded in the private manifest,
+  which is the authoritative provenance. Caught by the privacy-boundary test.
+
+### Measured (infrastructure, not scientific)
+
+* The BlueDot direction family was built from the pinned Gemma 3 1B unembedding and frozen to
+  `data/direction_manifests/bluedot_state_dependence_directions_v1.json`, family hash
+  `sha256:809fbb5b033da740a01574ad5a0ca48f34baca38eef1504a0d66bba8e2fb9138`: eight unit
+  directions, answer-span rank 3, worst answer-to-random dot 2.82e-09, zero redraws. No prompt
+  was run, no state was captured, no intervention was applied, and this is not causal
+  validation. Values are in `docs/experiment_log.md`.
+
 ### Added (2026-07-27, BlueDot slice B1: deterministic prompt manifests)
 
 * `PromptRole` (`smoke`, `calibration`, `training`, `final_test`), plus the `PromptAssignment`

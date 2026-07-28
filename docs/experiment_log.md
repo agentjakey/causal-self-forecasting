@@ -315,11 +315,76 @@ prompt now carries both.
 Suite after this slice: **326 passed, 1 skipped** (273 before, 53 added). Ruff, ruff format,
 pyright, and `csf doctor` clean.
 
+## 2026-07-27: BlueDot direction family built (infrastructure, not a scientific result)
+
+**Directions were constructed from model weights. No prompt was run. No state was captured. No
+intervention was applied. No behavioral or scientific outcome was generated.** The only thing
+read from the model was the output-embedding matrix.
+
+**This is construction, not causal validation.** The eight directions are stimuli with a
+recorded recipe. Nothing here shows that any of them is meaningful, load-bearing, or
+bias-related, and every stored artifact carries `validated: false`.
+
+Commands:
+
+```powershell
+uv run csf directions build-family --config configs/directions/bluedot_state_dependence.yaml
+uv run csf directions verify-family --manifest-id bluedot_state_dependence_directions_v1
+uv run csf directions verify-family --manifest-id bluedot_state_dependence_directions_v1 --regenerate
+```
+
+Values below are read from the written manifest, not typed from memory.
+
+| Field | Value |
+| --- | --- |
+| Manifest | `data/direction_manifests/bluedot_state_dependence_directions_v1.json` |
+| Family hash | `sha256:809fbb5b033da740a01574ad5a0ca48f34baca38eef1504a0d66bba8e2fb9138` |
+| Model | `google/gemma-3-1b-it` at `dcc83ea841ab6100d6b47a070329e1ba4cf78752` |
+| Tokenizer revision | `dcc83ea841ab6100d6b47a070329e1ba4cf78752` |
+| Output-embedding source | `get_output_embeddings`, shape 262144 x 1152 |
+| Tied embeddings | true, observed from the tensors; the config also declares `tie_word_embeddings: true` |
+| Hidden dimension | 1152 |
+| Resolved answer token ids | A=562, B=603, C=565, D=622, resolved through `resolve_label_token_ids` and matched against the pinned expectations before building |
+| Master seed | 20260727 |
+| Derived control seed | 2936319247 |
+| Answer-span effective rank | 3 |
+| Directions | 8: four centered answer-token, four orthogonal random controls |
+| Redraws | 0 |
+
+Raw answer-direction norms, before unit normalization: A 0.9331798302046521,
+B 0.7530634390447186, C 0.793201456422512, D 0.8334530774210125.
+
+Numerical diagnostics: centered-direction sum residual 2.78e-17; answer-span orthonormality
+error 1.73e-17; maximum norm error 2.16e-09; maximum answer-to-random absolute dot 2.82e-09;
+maximum random-to-random off-diagonal absolute dot 2.30e-09. All are far inside the frozen
+1e-5 tolerances for saved float32 vectors.
+
+The maximum pairwise absolute cosine among the four answer directions is 0.4157. That is
+expected and is not a defect: the four centered directions are linearly dependent by
+construction, which is also why the answer span has rank 3 rather than 4.
+
+Opaque direction ids, in manifest order: `bd1.1dd98ed52e4a9a42`, `bd1.26e4bcbe30ca5694`,
+`bd1.3d3f6efa84923ded`, `bd1.969ccca09bfd9674`, `bd1.b438e9212bf46d7c`, `bd1.c17341363a8e3c8b`,
+`bd1.cfe2d7ba9d21c997`, `bd1.f3aad413c49dfbad`. The ids are hash prefixes and the ordering is by
+id, so neither the string nor the position says which family a direction came from. The mapping
+to construction roles lives only in the manifest, which is private provenance.
+
+Verification. Artifact-level (no model loaded): valid, 8 of 8 directions checked, no failures,
+no container notes. Regeneration (pinned model reloaded, nothing written): valid, rebuilt family
+hash identical to the manifest. Re-running the build reported `status: unchanged` and left the
+manifest byte-identical with its mtime untouched; all eight `.npz` files were also unchanged.
+
+The eight vector artifacts live in the git-ignored `artifacts/directions/`. They were not
+force-added. The manifest is sufficient to regenerate and re-verify them from the pinned
+revision, the config, the seed, and the algorithm versions it records.
+
+Offline suite before loading any weights: **400 passed, 1 skipped** (326 before, 74 added).
+Ruff, ruff format, pyright, and `csf doctor` clean.
+
 ## Next entry
 
-The next step is implementation slice B2 in `docs/build_plan.md`: the direction bank and the
-fixed intervention projection matrix. It loads the pinned model to read the unembedding rows but
-scores no prompt and captures no state.
+The next step is implementation slice B2b in `docs/build_plan.md`: the fixed 16-dimensional
+intervention projection matrix. It needs no model.
 
 No CSF-Bench scientific result exists yet, and none should be reported until a real comparison
 has been run and verified.

@@ -99,6 +99,12 @@ reuse a group, or relax disjointness.
 
 ## G2. Direction bank and projection matrix
 
+**Direction bank: passed, 2026-07-27.** Frozen at
+`data/direction_manifests/bluedot_state_dependence_directions_v1.json`, family hash
+`sha256:809fbb5b033da740a01574ad5a0ca48f34baca38eef1504a0d66bba8e2fb9138`. Values and
+diagnostics are in `docs/experiment_log.md`. **The projection matrix `P` is not built yet**;
+it is slice B2b and needs no model.
+
 **Work:** read the unembedding rows for tokens 562, 603, 565, 622; build four centered unit
 answer directions; build four Gaussian controls orthogonal to their span and to each other;
 store all eight in `DirectionStore` with metadata; generate and store the fixed `1152 x 16`
@@ -119,6 +125,17 @@ this stage.**
 | Projection | `P` has orthonormal columns within `1e-6`, and is injective on the realized 16 signed vectors |
 | Privacy | no family label or meaningful id reaches `public_metadata` or the candidate public view |
 | Provenance | a `DirectionFamilyRecord` cites the model revision, the accessor used, the token ids, the seed, and eight file hashes |
+
+Every direction-bank check passed. Answer span rank 3, as the design predicts. Worst
+answer-to-random absolute dot 2.82e-09 and worst random-to-random 2.30e-09, both far inside the
+1e-5 tolerance for saved float32 vectors. Regeneration from the pinned model reproduced every
+vector hash and the family hash exactly, and a second build reported `unchanged` without
+touching the manifest bytes or mtime.
+
+One recorded fact that was not predicted in advance: Gemma 3 1B **ties** its input and output
+embeddings. The accessor reads that off the tensors rather than the config flag, and both agree.
+The preferred `get_output_embeddings()` path was used, so the fallback was not exercised on the
+real model.
 
 **Fail branch:** fix the construction and regenerate. This gate has no scientific content; a
 failure here is a bug, not a finding.

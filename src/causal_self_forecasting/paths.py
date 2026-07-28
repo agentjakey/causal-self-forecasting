@@ -63,6 +63,20 @@ def prompt_manifest_path(manifest_id: str) -> Path:
     return prompt_manifests_dir() / f"{manifest_id}.json"
 
 
+def direction_manifests_dir() -> Path:
+    """Where direction-family manifests live.
+
+    Tracked, unlike the `.npz` vectors under `artifacts/directions/`. The manifest is small and
+    is the thing that makes a family citable and regenerable; the vectors are reproducible from
+    it plus the pinned model, so they stay out of version control.
+    """
+    return data_dir() / "direction_manifests"
+
+
+def direction_manifest_path(family_id: str) -> Path:
+    return direction_manifests_dir() / f"{family_id}.json"
+
+
 def artifacts_dir() -> Path:
     return repo_root() / "artifacts"
 

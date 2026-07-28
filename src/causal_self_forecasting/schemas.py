@@ -371,6 +371,256 @@ class PromptManifest(Versioned):
 
 
 # ---------------------------------------------------------------------------
+# Direction families
+#
+# A direction family is a set of intervention stimuli built once from model weights, before
+# any prompt is run. The record below is private experimental provenance: it maps opaque
+# direction ids to the construction role that produced them, which is exactly the mapping a
+# forecaster must never see. It lives in its own file, outside `public_metadata` and outside
+# every candidate view, so that the name of the thing it sits in tells the truth about who may
+# read it.
+#
+# Building a direction from the unembedding is construction, not causal validation. Nothing
+# here licenses describing a direction as meaningful, load-bearing, or bias-related.
+# ---------------------------------------------------------------------------
+
+
+class DirectionConstructionRole(StrEnum):
+    """How a direction was built. Private, and never published to a forecaster."""
+
+    ANSWER_TOKEN_CENTERED = "answer_token_centered"
+    RANDOM_ORTHOGONAL_CONTROL = "random_orthogonal_control"
+
+
+class DirectionTolerances(Base):
+    """The frozen numerical thresholds the construction depends on.
+
+    Part of the hashed payload: a family built under different tolerances is a different
+    family, even when the arithmetic happens to land in the same place.
+    """
+
+    # float64 residual norm below which a Gram-Schmidt candidate is treated as dependent.
+    rank_tolerance: float = Field(gt=0.0)
+    # float64 residual norm below which a random draw is rejected and redrawn.
+    redraw_tolerance: float = Field(gt=0.0)
+    # float64 component magnitude that counts as the first significant component for sign
+    # canonicalization.
+    sign_tolerance: float = Field(gt=0.0)
+    # Validation thresholds applied to the saved float32 vectors.
+    norm_tolerance: float = Field(gt=0.0)
+    orthogonality_tolerance: float = Field(gt=0.0)
+
+
+class DirectionEntry(Base):
+    """One direction in a family.
+
+    `artifact_hash` is deliberately outside the hashed payload. It covers the `.npz` container,
+    whose bytes depend on the archive writer, while `vector_hash` covers the float32 values
+    themselves. The numbers are what the family is; the container is how they were stored.
+    """
+
+    opaque_id: Identifier
+    construction_role: DirectionConstructionRole
+    role_index: int = Field(ge=0)
+    label: str | None = None
+    token_id: int | None = None
+    dim: int = Field(gt=0)
+    vector_hash: HashString
+    artifact_hash: HashString
+    raw_norm: float | None = None
+    norm: float
+
+    @model_validator(mode="after")
+    def _check_role_fields(self) -> DirectionEntry:
+        if self.construction_role is DirectionConstructionRole.ANSWER_TOKEN_CENTERED:
+            if self.label is None or self.token_id is None or self.raw_norm is None:
+                raise ValueError(
+                    f"answer-token direction {self.opaque_id} must record its label, token id, "
+                    "and raw norm"
+                )
+            if self.raw_norm <= 0.0:
+                raise ValueError(f"answer-token direction {self.opaque_id} has a zero raw norm")
+        elif self.label is not None or self.token_id is not None or self.raw_norm is not None:
+            raise ValueError(
+                f"random control {self.opaque_id} must not carry a label, token id, or raw norm"
+            )
+        return self
+
+
+class DirectionFamilyDiagnostics(Base):
+    """Measurements about a built family. Reported, and outside the hashed payload.
+
+    These are raw float64 quantities. Keeping them out of the content hash means a family
+    stays identifiable by what it is rather than by the last bit of a diagnostic, while the
+    vectors themselves remain pinned by their content hashes.
+    """
+
+    centered_sum_max_abs_residual: float
+    answer_span_orthonormality_error: float
+    max_answer_pairwise_abs_cosine: float
+    max_norm_error: float
+    max_answer_to_random_abs_dot: float
+    max_random_to_random_abs_dot: float
+    random_redraws: int = Field(ge=0)
+
+
+class DirectionFamilyRecord(Versioned):
+    """A built, hashed, verifiable set of intervention directions.
+
+    The validator recomputes the family hash on load, so an edited manifest does not parse.
+    """
+
+    family_id: Identifier
+    study_id: Identifier
+    construction_algorithm_version: str
+    basis_algorithm_version: str
+    random_algorithm_version: str
+
+    model_id: str
+    model_revision: str
+    tokenizer_revision: str
+    output_embedding_source: str
+    tied_embeddings: bool
+    config_tie_word_embeddings: bool | None
+    hidden_dim: int = Field(gt=0)
+    vocab_size: int = Field(gt=0)
+
+    answer_labels: list[str] = Field(min_length=4, max_length=4)
+    answer_token_ids: dict[str, int]
+
+    master_seed: int
+    seed_derivation_labels: list[str] = Field(min_length=1)
+    derived_random_seed: int
+    random_generator: str
+
+    answer_span_rank: int = Field(ge=1)
+    tolerances: DirectionTolerances
+    directions: list[DirectionEntry] = Field(min_length=1)
+    diagnostics: DirectionFamilyDiagnostics
+    config_hash: HashString
+    family_hash: HashString
+
+    # Provenance and creation metadata, outside the hashed payload.
+    config_path: str
+    environment: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utc_now)
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def _check_family(self) -> DirectionFamilyRecord:
+        ids = [entry.opaque_id for entry in self.directions]
+        if len(set(ids)) != len(ids):
+            raise ValueError("a direction family must not repeat an opaque id")
+        if ids != sorted(ids):
+            raise ValueError(
+                "directions must be stored in ascending opaque-id order, so that position "
+                "carries no information about construction role"
+            )
+
+        if set(self.answer_token_ids) != set(self.answer_labels):
+            raise ValueError("answer_token_ids must name exactly the answer labels")
+        if len(set(self.answer_token_ids.values())) != len(self.answer_token_ids):
+            raise ValueError("two answer labels resolved to the same token id")
+
+        answers = [
+            entry
+            for entry in self.directions
+            if entry.construction_role is DirectionConstructionRole.ANSWER_TOKEN_CENTERED
+        ]
+        if len(answers) != len(self.answer_labels):
+            raise ValueError(
+                f"expected one answer-token direction per label, got {len(answers)} for "
+                f"{len(self.answer_labels)} labels"
+            )
+        if sorted(entry.label or "" for entry in answers) != sorted(self.answer_labels):
+            raise ValueError("the answer-token directions do not cover every answer label")
+        for entry in answers:
+            if entry.label is not None and entry.token_id != self.answer_token_ids[entry.label]:
+                raise ValueError(
+                    f"direction {entry.opaque_id} cites token id {entry.token_id} for label "
+                    f"{entry.label}, but the family resolved {self.answer_token_ids[entry.label]}"
+                )
+
+        if any(entry.dim != self.hidden_dim for entry in self.directions):
+            raise ValueError("every direction must have the family's hidden dimension")
+
+        if self.answer_span_rank > len(answers):
+            raise ValueError(
+                f"answer_span_rank {self.answer_span_rank} exceeds the number of answer "
+                f"directions ({len(answers)})"
+            )
+
+        recomputed = compute_direction_family_hash(self.model_dump(mode="json"))
+        if recomputed != self.family_hash:
+            raise ValueError(
+                f"family_hash {self.family_hash} does not match the family contents "
+                f"({recomputed}); the file has been edited since it was written"
+            )
+        return self
+
+    def by_role(self, role: DirectionConstructionRole) -> list[DirectionEntry]:
+        return [entry for entry in self.directions if entry.construction_role is role]
+
+
+# Fields covered by the family content hash. Excluded: `family_hash` itself, the diagnostics,
+# the per-direction float measurements, the artifact container hashes, the config path, the
+# environment snapshot, and the creation timestamp.
+DIRECTION_FAMILY_HASHED_FIELDS = (
+    "schema_version",
+    "family_id",
+    "study_id",
+    "construction_algorithm_version",
+    "basis_algorithm_version",
+    "random_algorithm_version",
+    "model_id",
+    "model_revision",
+    "tokenizer_revision",
+    "output_embedding_source",
+    "tied_embeddings",
+    "hidden_dim",
+    "vocab_size",
+    "answer_labels",
+    "answer_token_ids",
+    "master_seed",
+    "seed_derivation_labels",
+    "derived_random_seed",
+    "random_generator",
+    "answer_span_rank",
+    "tolerances",
+    "directions",
+    "config_hash",
+)
+
+# Per-direction fields inside the hashed payload. Identity and content only, no raw floats.
+DIRECTION_ENTRY_HASHED_FIELDS = (
+    "opaque_id",
+    "construction_role",
+    "role_index",
+    "label",
+    "token_id",
+    "dim",
+    "vector_hash",
+)
+
+
+def direction_family_payload(dumped: dict[str, Any]) -> dict[str, Any]:
+    """The exact object a family hash covers, taken from a JSON-mode model dump."""
+    missing = [name for name in DIRECTION_FAMILY_HASHED_FIELDS if name not in dumped]
+    if missing:
+        raise ValueError(f"direction family dump is missing hashed fields: {missing}")
+    payload = {name: dumped[name] for name in DIRECTION_FAMILY_HASHED_FIELDS}
+    payload["directions"] = [
+        {name: entry[name] for name in DIRECTION_ENTRY_HASHED_FIELDS}
+        for entry in payload["directions"]
+    ]
+    return payload
+
+
+def compute_direction_family_hash(dumped: dict[str, Any]) -> str:
+    return hash_object(direction_family_payload(dumped))
+
+
+# ---------------------------------------------------------------------------
 # States and interventions
 # ---------------------------------------------------------------------------
 

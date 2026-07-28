@@ -14,7 +14,7 @@ import yaml
 from pydantic import ConfigDict, Field, model_validator
 
 from .hashing import hash_object
-from .schemas import Base, Framing, Mechanism, PromptRole, Split
+from .schemas import Base, Framing, Mechanism, PromptRole, Split, StudyRunRole
 
 
 def repo_root() -> Path:
@@ -296,6 +296,95 @@ class CalibrationPlanConfig(Base):
     @property
     def calibration_prompt_count(self) -> int:
         return self.expected_role_counts[PromptRole.CALIBRATION]
+
+
+class StateAuditRunConfig(Base):
+    """How to execute one state-dependence run against real weights.
+
+    Deliberately separate from `ExperimentConfig`. That config describes the benchmark's
+    four-candidate trial sweep, is read by `csf trials generate`, and carries a `direction_id`
+    and an intervention grid this arm does not use. Reusing it would mean loosening validators
+    the benchmark depends on.
+
+    The `expected_*` fields are assertions, not inputs. Counts, dimensions, and token ids are
+    always read from the frozen manifests and the loaded model; these values only decide whether
+    the run is allowed to proceed, so a manifest or a tokenizer that drifted stops the run
+    loudly instead of producing observations about something else.
+    """
+
+    name: str
+    study_id: str
+    run_role: StudyRunRole
+    prompt_role: PromptRole
+    target: str
+
+    model_ref: str
+    task_ref: str
+    prompt_manifest_id: str
+    direction_family_id: str
+    calibration_plan_id: str
+
+    layer: int
+    capture_position: int = -1
+    norm_ratio: float
+
+    expected_prompt_count: int = Field(gt=0)
+    expected_direction_count: int = Field(gt=0)
+    expected_signed_directions: int = Field(gt=0)
+    expected_hidden_dim: int = Field(gt=0)
+    expected_role_counts: dict[PromptRole, int] = Field(min_length=1)
+
+    master_seed: int
+    noop_tolerance: float = Field(gt=0.0)
+    # Reported in the run diagnostics so an engineering run says what it saw. It is not a pass
+    # condition here: calibration, not a smoke run, decides which ratio the study uses.
+    effect_report_threshold: float = Field(default=0.10, gt=0.0)
+
+    @model_validator(mode="after")
+    def _check_run_config(self) -> StateAuditRunConfig:
+        if self.target != STATE_AUDIT_TARGET_NAME:
+            raise ValueError(
+                f"target must be {STATE_AUDIT_TARGET_NAME!r} for this arm, got {self.target!r}"
+            )
+        if self.layer not in ALLOWED_CALIBRATION_LAYERS:
+            raise ValueError(
+                f"layer {self.layer} is not one of the preregistered layers "
+                f"{list(ALLOWED_CALIBRATION_LAYERS)}; no other layer may be run"
+            )
+        if float(self.norm_ratio) not in FROZEN_NORM_RATIOS:
+            raise ValueError(
+                f"norm_ratio {self.norm_ratio} is not on the frozen grid "
+                f"{list(FROZEN_NORM_RATIOS)}; a strength off the grid is an amendment, not a "
+                "config change"
+            )
+        if self.expected_signed_directions != 2 * self.expected_direction_count:
+            raise ValueError(
+                f"expected_signed_directions {self.expected_signed_directions} is not two per "
+                f"direction for {self.expected_direction_count} directions"
+            )
+
+        missing = sorted(role.value for role in PromptRole if role not in self.expected_role_counts)
+        if missing:
+            raise ValueError(f"expected_role_counts must name every prompt role; missing {missing}")
+        if any(count <= 0 for count in self.expected_role_counts.values()):
+            raise ValueError("every expected role count must be positive")
+
+        declared = self.expected_role_counts[self.prompt_role]
+        if declared != self.expected_prompt_count:
+            raise ValueError(
+                f"the {self.prompt_role.value} role holds {declared} prompts but "
+                f"expected_prompt_count is {self.expected_prompt_count}"
+            )
+        return self
+
+    @property
+    def candidates_per_prompt(self) -> int:
+        """Signed directions plus one no-op. The selected-strength shape."""
+        return self.expected_signed_directions + 1
+
+    @property
+    def expected_forward_count(self) -> int:
+        return self.expected_prompt_count * (1 + self.candidates_per_prompt)
 
 
 class InterventionConfig(Base):

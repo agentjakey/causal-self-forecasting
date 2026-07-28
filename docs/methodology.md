@@ -191,6 +191,21 @@ What a run actually writes, verified against `paths.py` and a real run directory
 | `scores.json` | scoring |
 | `score_records.jsonl` | scoring |
 
+A BlueDot state-dependence run writes its own set, prefixed so the two can never be confused. A
+study run holds `delta_clean_top_margin` observations and a benchmark run holds `delta_margin`
+ones, and a reader that picked up the wrong file would be reading a different quantity under a
+familiar name:
+
+| File | Written by |
+| --- | --- |
+| `state_audit_clean_pass.jsonl` | state-audit run, clean pass |
+| `state_audit_states.npz` | state-audit run, clean pass |
+| `state_audit_state_refs.jsonl` | state-audit run, clean pass |
+| `state_audit_candidate_sets.jsonl` | state-audit run |
+| `state_audit_observations.jsonl` | state-audit run |
+| `state_audit_failures.jsonl` | state-audit run, when a prompt or candidate fails |
+| `state_audit_run.json` | state-audit run |
+
 Observations are JSONL, not parquet. Every other record in a run is line-oriented JSON, the
 volume is small, and a hashable line-oriented file needs none of the machinery a parquet writer
 would pull in. `paths.OBSERVATIONS` still names `observations.parquet` as a documented long-term
@@ -278,6 +293,37 @@ Provenance for that family, as built (`interventions/direction_family.py`):
   manifest, and the `.npz` metadata in the payload store carries no role, label, or family term.
 * The family is verifiable two ways: against the stored artifacts with no model loaded, and by
   regenerating every vector from the pinned weights and comparing content hashes.
+
+**Its own candidate shapes.** The arm does not reuse the four-candidate builder of section 2,
+which stays exactly as it is for the original study. Two study builders exist, kept separate so
+that a grid cannot reach a role that should run at one strength:
+
+* **selected strength**, 8 directions x 2 signs at one ratio plus a no-op, 17 per prompt, used by
+  smoke, training, and final test;
+* **calibration grid**, 8 directions x 2 signs x 5 ratios plus **one shared no-op**, 81 per
+  prompt, used by calibration and nothing else. One no-op, not one per ratio: adding zero does
+  the same thing whatever ratio is under test.
+
+A candidate cites the opaque direction id, that direction's vector hash, the sign, the layer, the
+ratio, the global alpha, and a hash of the signed intervention itself; the set cites the family
+hash and its own content hash. The record type refuses an identifier naming a construction role,
+an answer label, a random-control label, or a semantic family, and the set validator refuses more
+than one alpha at a ratio. Order is a seeded shuffle with opaque ids assigned afterwards, so
+position encodes nothing, and the public view narrows to operation, layer, position, and strength
+exactly as section 2 requires.
+
+**Its own run records, and its own artifact names.** A study run carries a typed `run_role`
+(`engineering_smoke`, `calibration`, `training`, `final_test_unresolved`, `final_test_resolved`)
+rather than leaving the stage to be inferred from which files exist, and its `status` is derived:
+a manifest cannot call itself complete while a count is short or a failure is recorded. Study
+artifacts are prefixed `state_audit_*`, so a study run directory can never be read as a benchmark
+trial run holding `delta_margin` observations. Verification is artifact-only and loads no model.
+
+**The engineering smoke is not calibration.** Gate G3 runs the 8 smoke prompts at ratio 0.10, a
+value fixed in advance because it is arbitrary. Its reference norm is the median clean state norm
+over those 8 prompts and is not the calibration reference norm; its effect sizes select no ratio
+and no layer. That fence is enforced rather than stated: `csf calibration summarize` refuses
+observations whose prompt role is not `calibration`.
 
 **All candidates resolved, no selection.** The arm forecasts and observes every candidate, so
 the single-candidate selection step in section 5 is replaced by a no-selection reveal: the salt

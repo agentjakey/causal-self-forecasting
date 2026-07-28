@@ -1,0 +1,57 @@
+# Engineering smoke run for the BlueDot state-dependence arm.
+#
+# Gate G3 in docs/bluedot/execution_decision_tree.md. This run proves the pipeline end to end on
+# real weights at a scale where a mistake is cheap. It selects nothing: the layer and the ratio
+# below were both fixed in advance, precisely so that neither could be chosen later with the
+# effect distribution in view.
+#
+# 8 prompts x (1 clean forward + 17 candidates) = 144 forwards.
+name: bluedot_state_dependence_smoke
+study_id: bluedot_state_dependence
+
+# Typed, not inferred from which files a run happens to write. An engineering smoke is never a
+# scientific result and the record type makes that unconstructible rather than discouraged.
+run_role: engineering_smoke
+prompt_role: smoke
+
+# The arm's own target. Not the benchmark's delta_margin, which measures the margin around the
+# dataset-correct answer and keeps its own meaning.
+target: delta_clean_top_margin
+
+model_ref: configs/models/gemma3_1b_it.yaml
+task_ref: configs/tasks/arc_mcq.yaml
+
+prompt_manifest_id: bluedot_state_dependence_v1
+direction_family_id: bluedot_state_dependence_directions_v1
+calibration_plan_id: bluedot_state_dependence_calibration_v1
+
+# Layer 13 is where the systems benchmark already verified capture on these weights
+# (capture_point_verified: true, max_abs_patch_error: 0.0).
+layer: 13
+capture_position: -1
+
+# The preregistered arbitrary smoke ratio: the middle grid point. This is a plumbing check, and
+# the effect sizes it produces select no ratio and no layer. Calibration, over the 32 calibration
+# prompts, is what chooses the study's strength.
+norm_ratio: 0.10
+
+# Assertions, not inputs. Counts and dimensions are always read from the frozen manifests and the
+# loaded model; these values only decide whether the run is allowed to proceed.
+expected_prompt_count: 8
+expected_direction_count: 8
+expected_signed_directions: 16
+expected_hidden_dim: 1152
+expected_role_counts:
+  smoke: 8
+  calibration: 32
+  training: 96
+  final_test: 32
+
+master_seed: 20260727
+
+# The existing harness tolerance. A no-op must reproduce the clean output to within this, or the
+# harness rather than the model produced the effects.
+noop_tolerance: 1.0e-3
+
+# Reported in the run diagnostics so the run says what it saw. Not a pass condition here.
+effect_report_threshold: 0.10

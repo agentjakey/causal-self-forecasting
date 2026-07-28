@@ -99,7 +99,28 @@ strength would hand the visible-information baseline the prompt's state norm. Th
 the **smallest** passing ratio in preregistered order, never the largest effect, because
 choosing the stimulus by the outcome would make the comparison circular.
 
-**No calibration has been run and no ratio has been selected.**
+The eight-prompt engineering smoke has been executed on the pinned weights. It is the first
+BlueDot step that produced measured numbers, and it is plumbing validation rather than science:
+144 forwards, `scientific_result: false`, and a ratio and layer that were both fixed in advance
+so that neither could be chosen with the effect distribution in view.
+
+```powershell
+uv run csf state-audit smoke --config configs/state_audit/bluedot_smoke.yaml --run-id bluedot-smoke-layer13
+uv run csf state-audit verify-run --run-id bluedot-smoke-layer13
+uv run csf state-audit verify-run --run-id bluedot-smoke-layer13 --compare-run-id <SECOND_RUN_ID>
+```
+
+`smoke` loads the model; `verify-run` does not. Verification recomputes the run manifest's own
+content hash, every artifact hash, every observation's target from its own logits, the reference
+norm from the recorded clean state norms, and the single global alpha across every non-no-op
+observation. `--compare-run-id` compares two runs of the same inputs row by row, which is how
+cross-process determinism is measured. A completed run at the same id is refused rather than
+rewritten, because its artifacts are the only record of what happened. Measured values are in
+`docs/experiment_log.md`.
+
+**No calibration has been run and no ratio has been selected.** The smoke's effect sizes select
+nothing: `csf calibration summarize` refuses observations whose prompt role is not
+`calibration`, so a strength cannot be chosen from prompts that were not set aside to choose it.
 
 **Constructing a direction is not validating one.** These are stimuli with a recorded recipe.
 Their artifacts carry `validated: false`, and nothing about them licenses calling any direction
@@ -168,6 +189,10 @@ uv run csf directions verify-family --manifest-id bluedot_state_dependence_direc
 # Freeze the calibration plan (offline, no model)
 uv run csf calibration plan --config configs/calibration/bluedot_state_dependence.yaml
 uv run csf calibration verify-plan --plan-id bluedot_state_dependence_calibration_v1
+
+# BlueDot engineering smoke on the pinned weights (144 forwards), then verify from artifacts
+uv run csf state-audit smoke --config configs/state_audit/bluedot_smoke.yaml --run-id bluedot-smoke-layer13
+uv run csf state-audit verify-run --run-id bluedot-smoke-layer13
 
 # Smoke pipeline on the fixture model, offline
 uv run csf directions synthetic --config configs/experiments/smoke.yaml

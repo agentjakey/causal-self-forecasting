@@ -142,6 +142,11 @@ failure here is a bug, not a finding.
 
 ## G3. Smoke run
 
+**Status: passed, 2026-07-28.** Executed as `results/runs/bluedot-smoke-layer13`, run manifest
+hash `sha256:6f16b22d9887bcff38e3192205e3cf74f9c794b709437fa9d78a664276c67b3f`, 144 forwards, 136
+observations, no failures. Measured values are in `docs/experiment_log.md`. The run carries
+`scientific_result: false` and selected nothing.
+
 **Purpose:** prove the pipeline end to end on real weights at a scale where a mistake is cheap.
 8 prompts x 17 candidates plus 8 clean forwards = **144 forwards**, roughly 68 s of forward time
 plus one model load.
@@ -156,11 +161,31 @@ its numbers are not used to select anything.
 | --- | --- |
 | Hook fired | every intervention records `fired`, no `CaptureError` |
 | No-op | every no-op has `abs(delta_clean_top_margin) <= 1e-3` and `delta_norm == 0.0` |
-| Clean reproduction | the resolution model reproduces the committed clean margin within `rerun_tolerance` |
+| Clean reproduction | the no-op reproduces the clean output within tolerance, and a second run of the same command reproduces every clean logit |
 | Target definition | `intervened_top_margin < 0` coincides exactly with `answer_flip` |
 | Determinism | rerunning reproduces every target bit-for-bit |
-| Failures | `resolution_failures.jsonl` is empty |
-| Classification | the run manifest says smoke, and `scientific_result` is false |
+| Failures | `state_audit_failures.jsonl` is empty |
+| Classification | the run manifest says `engineering_smoke`, and `scientific_result` is false |
+
+All seven passed. Every capture hook and every intervention hook fired (8 and 136); every no-op
+reproduced the clean logits exactly, so the worst absolute no-op target and the worst no-op
+`delta_norm` were both 0.0; the intervened residual stream, re-read after the intervention hook
+in the same forward, matched `h + sign * alpha * d` to 0.0 across all 136 candidates. A second
+execution into a separate run id reproduced every one of the 136 targets and every intervened
+logit with a maximum absolute difference of 0.0, and produced the same reference norm and alpha.
+`csf state-audit verify-run` returns `valid: true` with no failures.
+
+Two clean-reproduction notes. The check named in the original version of this row referred to a
+committed clean margin from an earlier process, which does not exist at this stage: the clean
+forward and the intervened forwards happen in one run, so the same-process check is the no-op and
+the cross-process check is the determinism rerun. Both were done.
+
+One recorded fact that was not predicted in advance: at ratio 0.10 the layer-13 effect
+distribution on the smoke prompts is large, with a 95th percentile of 4.65 in absolute target.
+That is above the preregistered C5 ceiling of 4.0. **It is not a calibration result and it does
+not move the grid.** C5 is evaluated over the 32 calibration prompts at G4, which are disjoint
+from these 8, and the ratio the study uses is whatever that evaluation selects. Recording the
+observation here means it cannot later be presented as a surprise.
 
 **Fail branch:** fix and rerun. A smoke failure is an engineering failure and never advances the
 study.

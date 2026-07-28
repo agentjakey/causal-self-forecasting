@@ -44,6 +44,9 @@ calibration_app = typer.Typer(
 directions_app = typer.Typer(
     help="Create and inspect intervention directions.", no_args_is_help=True
 )
+state_audit_app = typer.Typer(
+    help="Execute and verify BlueDot state-dependence runs.", no_args_is_help=True
+)
 interventions_app = typer.Typer(help="Validate the intervention harness.", no_args_is_help=True)
 trials_app = typer.Typer(help="Generate and resolve trials.", no_args_is_help=True)
 score_app = typer.Typer(help="Score resolved runs.", no_args_is_help=True)
@@ -53,6 +56,7 @@ app.add_typer(data_app, name="data")
 app.add_typer(prompts_app, name="prompts")
 app.add_typer(calibration_app, name="calibration")
 app.add_typer(directions_app, name="directions")
+app.add_typer(state_audit_app, name="state-audit")
 app.add_typer(interventions_app, name="interventions")
 app.add_typer(trials_app, name="trials")
 app.add_typer(score_app, name="score")
@@ -99,6 +103,7 @@ def doctor() -> None:
         DirectionFamilyConfig,
         InterventionConfig,
         PromptManifestConfig,
+        StateAuditRunConfig,
     )
 
     config_types: list[tuple[str, type]] = [
@@ -109,6 +114,7 @@ def doctor() -> None:
         ("configs/prompts", PromptManifestConfig),
         ("configs/directions", DirectionFamilyConfig),
         ("configs/calibration", CalibrationPlanConfig),
+        ("configs/state_audit", StateAuditRunConfig),
     ]
 
     results: dict[str, Any] = {}
@@ -579,6 +585,101 @@ def directions_verify_family(
     if not report["valid"]:
         typer.secho(
             f"direction family {manifest_id} did not verify",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@state_audit_app.command("smoke")
+def state_audit_smoke(
+    config: Path = typer.Option(..., "--config", help="Path to a state-audit run config."),
+    run_id: str = typer.Option(..., "--run-id", help="Run id to write artifacts under."),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite a documented partial or failed run at this id. Never a completed one.",
+    ),
+) -> None:
+    """Run the eight-prompt engineering smoke on the pinned weights.
+
+    Loads the model. One clean forward per prompt capturing the layer-13 residual stream, then
+    all 17 candidates per prompt: 144 forwards in total. The intervention strength is one global
+    alpha, computed as the preregistered ratio times the median clean state norm across the smoke
+    prompts, and applied unchanged to every prompt and every signed direction.
+
+    This is engineering validation. It carries `scientific_result: false`, the ratio and the
+    layer were both fixed in advance, and its effect sizes select nothing. A completed run at the
+    same id is refused rather than rewritten, because its artifacts are the only record of what
+    happened.
+    """
+    from .state_audit.run import StateAuditRunError, run_smoke
+
+    directory = ensure_run_dir(run_id)
+    configure_logging("INFO", log_file=directory / RUN_LOG)
+
+    try:
+        report = run_smoke(config, run_id, force=force)
+    except StateAuditRunError as error:
+        typer.secho(f"state-audit smoke failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+
+    if report["status"] != "complete":
+        typer.secho(
+            f"run {run_id} did not complete: {report['counts']['failures']} failures were "
+            "recorded and the manifest is marked failed",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@state_audit_app.command("verify-run")
+def state_audit_verify_run(
+    run_id: str = typer.Option(..., "--run-id", help="State-audit run id to verify."),
+    compare_run_id: str | None = typer.Option(
+        None,
+        "--compare-run-id",
+        help="Second run of the same inputs. Compares every target to measure determinism.",
+    ),
+    tolerance: float = typer.Option(
+        0.0, "--tolerance", help="Allowed absolute target difference when comparing two runs."
+    ),
+    output: Path | None = typer.Option(None, "--output", help="Write the report to a file."),
+) -> None:
+    """Verify a state-audit run from its artifacts. Loads no model.
+
+    Recomputes the manifest's own content hash, every artifact hash, every observation's target
+    from its own logits, the reference norm from the recorded clean state norms, and the single
+    global alpha across every non-no-op observation. With `--compare-run-id` it also compares two
+    runs of the same inputs row by row, which is how cross-process determinism is measured.
+    """
+    from .state_audit.run import StateAuditRunError
+    from .state_audit.verify import compare_runs, verify_run
+
+    try:
+        report = verify_run(run_id)
+        if compare_run_id is not None:
+            report["determinism"] = compare_runs(run_id, compare_run_id, tolerance=tolerance)
+    except StateAuditRunError as error:
+        typer.secho(f"state-audit verification failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+    if output is not None:
+        atomic_write_json(output, report)
+
+    determinism = report.get("determinism")
+    if not report["valid"]:
+        typer.secho(
+            f"run {run_id} did not verify: {report['failures']}", fg=typer.colors.RED, err=True
+        )
+        raise typer.Exit(code=1)
+    if determinism is not None and not determinism["deterministic"]:
+        typer.secho(
+            f"runs {run_id} and {compare_run_id} do not agree: {determinism['differences']}",
             fg=typer.colors.RED,
             err=True,
         )

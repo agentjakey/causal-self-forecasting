@@ -231,23 +231,24 @@ baselines, and it defers Phases 5, 6, and 8 through 13.
 | B2b | The fixed 16-dimensional intervention projection matrix | not started |
 | B3a | Study target `delta_clean_top_margin`, global strength rule, calibration schemas, thresholds, layer state machine, and the frozen plan | **done, 2026-07-28**; plan frozen at `data/calibration_plans/bluedot_state_dependence_calibration_v1.json` |
 | B3b | Running the real calibration sweep and producing a decision | not started; needs the model |
-| B4 | 17-candidate and 81-candidate study candidate sets | not started |
+| B4 | 17-candidate and 81-candidate study candidate sets | **done, 2026-07-28**; `state_audit/candidates.py`, both builders, opaque ids, public view |
 | B5 | Commitment-protocol hardening: extended key, no-selection reveal, pre-existing-outcome refusal | not started |
 | B6 | `StateAuditExample` and block-structured features | not started |
 | B7 | `TransformFitRecord` and fit-boundary enforcement | not started |
 | B8 | Three ridges and grouped cross-validation | not started |
 | B9 | Paired prompt bootstrap and prompt-first aggregation | not started |
-| B10 | `csf verify study` and `csf replay` | not started |
-| B11 | Smoke run (8 prompts) | not started |
-| B12 | Calibration, training, final test | not started |
+| B10 | `csf verify study` and `csf replay` | partial; `csf state-audit verify-run` verifies one run from artifacts with no model |
+| B11 | Smoke run (8 prompts) | **done, 2026-07-28**; `results/runs/bluedot-smoke-layer13`, 144 forwards, verified, `scientific_result: false` |
+| B12 | Calibration, training, final test | not started; needs the model and a maintainer decision |
 
 Compute for the whole arm is about 40 minutes of forward time on this CPU, about 61 with the
 preregistered layer-20 fallback. No GPU and no compute grant is needed. See
 `docs/compute_decision.md` section 5.
 
-The one prerequisite that is not compute: the prepared ARC dataset currently holds 20 items, and
-the arm needs at least 168 eligible groups. `csf data prepare` must be rerun at a higher
-`--max-items`, which needs network access and cannot run offline.
+The one prerequisite that is not compute is satisfied. The ARC pool was re-prepared on
+2026-07-27 and now holds 256 items, 256 groups, and 2,048 variants against the 168 the arm
+needs. `csf data prepare` needs network access to `allenai/ai2_arc` and cannot run under
+`HF_HUB_OFFLINE=1`, so it is done once, outside the offline pipeline.
 
 ## Phase 5 onward, deferred for the BlueDot arm
 

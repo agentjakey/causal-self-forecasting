@@ -26,6 +26,9 @@ from .state_audit_target import (
     ANSWER_LABELS,
     TARGET_TOLERANCE,
     TargetError,
+    preferred_label,
+    preferred_margin,
+    validate_answer_logits,
     verify_state_audit_target,
 )
 
@@ -952,6 +955,14 @@ class StateAuditObservationRecord(Versioned):
     norm_ratio: float = Field(ge=0.0)
     global_alpha: float
 
+    # Residual-stream norm bookkeeping from the applied intervention. Optional because a record
+    # can be assembled from logits alone in a test, and recorded by every real run because a
+    # no-op with a nonzero `delta_norm` is the cheapest evidence that the harness, rather than
+    # the model, produced an effect.
+    pre_norm: float | None = None
+    post_norm: float | None = None
+    delta_norm: float | None = None
+
     model_id: str
     model_revision: str
     prompt_manifest_hash: HashString
@@ -1002,6 +1013,19 @@ class StateAuditObservationRecord(Versioned):
             raise ValueError(
                 f"observation {self.trial_id}/{self.candidate_id} disagrees with its own "
                 f"logits: {problems}"
+            )
+
+        for name, value in (
+            ("pre_norm", self.pre_norm),
+            ("post_norm", self.post_norm),
+            ("delta_norm", self.delta_norm),
+        ):
+            if value is not None and (not math.isfinite(value) or value < 0.0):
+                raise ValueError(f"{name} is {value!r}; a norm must be finite and non-negative")
+        if self.is_noop and self.delta_norm is not None and self.delta_norm != 0.0:
+            raise ValueError(
+                f"no-op {self.candidate_id} moved the residual stream by {self.delta_norm}; a "
+                "no-op adds nothing, so any displacement at all is a harness bug"
             )
         return self
 
@@ -1428,11 +1452,6 @@ def compute_calibration_decision_hash(dumped: dict[str, Any]) -> str:
     return hash_object(calibration_decision_payload(dumped))
 
 
-# ---------------------------------------------------------------------------
-# Run-level records
-# ---------------------------------------------------------------------------
-
-
 class ArtifactHashRecord(Versioned):
     """Provenance for one file produced by a run."""
 
@@ -1441,6 +1460,632 @@ class ArtifactHashRecord(Versioned):
     size_bytes: int = Field(ge=0)
     kind: str
     created_at: datetime = Field(default_factory=utc_now)
+
+
+# ---------------------------------------------------------------------------
+# The BlueDot state-dependence arm: candidates and study runs
+#
+# The benchmark's `CandidateSet` and its four-candidate builder are untouched. This arm needs a
+# different shape (17 candidates at a selected strength, 81 across the calibration grid), a
+# different provenance chain (opaque direction id, vector hash, sign, global alpha), and a
+# stricter privacy fence, so it gets its own records rather than a widened version of the
+# existing ones.
+#
+# Everything a predictor could see is opaque by construction. A candidate cites a direction by
+# its opaque id and its content hash; it never names a construction role, an answer label, a
+# random-control label, or a semantic family. The mapping from opaque id to construction role
+# lives in the private direction-family manifest and nowhere else.
+# ---------------------------------------------------------------------------
+
+
+class StudyRunRole(StrEnum):
+    """Which stage of the state-dependence arm produced a run.
+
+    Structural, not inferred from which files happen to exist. `RunManifest.phase` is a
+    free-form string that the benchmark's runs already use for their own purposes, so this arm
+    records its stage in a typed field instead of overloading that one.
+    """
+
+    ENGINEERING_SMOKE = "engineering_smoke"
+    CALIBRATION = "calibration"
+    TRAINING = "training"
+    FINAL_TEST_UNRESOLVED = "final_test_unresolved"
+    FINAL_TEST_RESOLVED = "final_test_resolved"
+
+
+class StateAuditCandidateKind(StrEnum):
+    """Which candidate set shape a trial carries.
+
+    `SELECTED_STRENGTH` is 8 directions x 2 signs at one ratio plus a no-op: 17. It is what
+    smoke, training, and final test use. `CALIBRATION_GRID` is 8 directions x 2 signs x 5 ratios
+    plus one shared no-op: 81, and only calibration uses it. The distinction is a typed field
+    rather than a count so that a grid set can never be handed to training by accident.
+    """
+
+    SELECTED_STRENGTH = "selected_strength"
+    CALIBRATION_GRID = "calibration_grid"
+
+
+def _check_opaque(text: str, field_name: str) -> None:
+    lowered = text.lower()
+    leaked = [term for term in _FORBIDDEN_DIRECTION_TERMS if term in lowered]
+    if leaked:
+        raise ValueError(
+            f"{field_name} {text!r} names {sorted(leaked)}, which would tell a reader the "
+            "direction's construction role; predictor-facing identifiers must be opaque"
+        )
+
+
+class StateAuditCandidate(Base):
+    """One intervention offered for one prompt in the state-dependence arm.
+
+    `strength` is `sign * global_alpha`, and `global_alpha` is a per-layer, per-ratio constant
+    that is identical across every prompt. That is the preregistered rule and the validator
+    enforces the arithmetic, because a prompt-specific strength would put the prompt's state
+    norm into the published candidate description and contaminate the headline comparison.
+    """
+
+    candidate_id: Identifier
+    order_index: int = Field(ge=0)
+    is_noop: bool
+    direction_ref: str | None = None
+    direction_vector_hash: HashString | None = None
+    sign: int = Field(ge=-1, le=1)
+    layer: int = Field(ge=0)
+    position_index: int
+    norm_ratio: float = Field(ge=0.0)
+    global_alpha: float = Field(ge=0.0)
+    strength: float
+    signed_intervention_hash: HashString
+
+    @model_validator(mode="after")
+    def _check_candidate(self) -> StateAuditCandidate:
+        _check_opaque(self.candidate_id, "candidate_id")
+
+        if self.is_noop:
+            wrong = {
+                "sign": self.sign,
+                "norm_ratio": self.norm_ratio,
+                "global_alpha": self.global_alpha,
+                "strength": self.strength,
+            }
+            offending = {name: value for name, value in wrong.items() if value != 0}
+            if offending:
+                raise ValueError(
+                    f"no-op candidate {self.candidate_id} must carry zeros; got {offending}"
+                )
+            if self.direction_ref is not None or self.direction_vector_hash is not None:
+                raise ValueError(
+                    f"no-op candidate {self.candidate_id} must not cite a direction; adding "
+                    "nothing has no direction to cite"
+                )
+            return self
+
+        if self.sign not in (-1, 1):
+            raise ValueError(
+                f"candidate {self.candidate_id} is not a no-op, so its sign must be -1 or +1, "
+                f"got {self.sign}"
+            )
+        if self.norm_ratio <= 0.0 or self.global_alpha <= 0.0:
+            raise ValueError(
+                f"candidate {self.candidate_id} has ratio {self.norm_ratio} and alpha "
+                f"{self.global_alpha}; a signed candidate needs both to be positive"
+            )
+        if self.direction_ref is None or self.direction_vector_hash is None:
+            raise ValueError(
+                f"candidate {self.candidate_id} must cite both an opaque direction id and that "
+                "direction's vector hash, so the intervention it names can be reconstructed"
+            )
+        _check_opaque(self.direction_ref, "direction_ref")
+
+        expected = self.sign * self.global_alpha
+        if abs(self.strength - expected) > 1e-12 * max(1.0, abs(expected)):
+            raise ValueError(
+                f"candidate {self.candidate_id} records strength {self.strength} but "
+                f"sign * global_alpha is {expected}"
+            )
+        return self
+
+
+# Every field of a candidate is part of what the candidate is, so the whole record is hashed.
+STATE_AUDIT_CANDIDATE_SET_HASHED_FIELDS = (
+    "schema_version",
+    "trial_id",
+    "study_id",
+    "variant_id",
+    "group_id",
+    "prompt_role",
+    "kind",
+    "layer",
+    "position_index",
+    "direction_family_id",
+    "direction_family_hash",
+    "direction_count",
+    "norm_ratios",
+    "order_seed",
+    "candidates",
+)
+
+
+def state_audit_candidate_set_payload(dumped: dict[str, Any]) -> dict[str, Any]:
+    missing = [name for name in STATE_AUDIT_CANDIDATE_SET_HASHED_FIELDS if name not in dumped]
+    if missing:
+        raise ValueError(f"candidate set dump is missing hashed fields: {missing}")
+    return {name: dumped[name] for name in STATE_AUDIT_CANDIDATE_SET_HASHED_FIELDS}
+
+
+def compute_state_audit_candidate_set_hash(dumped: dict[str, Any]) -> str:
+    return hash_object(state_audit_candidate_set_payload(dumped))
+
+
+class StateAuditCandidateSet(Versioned):
+    """The candidates offered for one prompt, in the order they are applied.
+
+    Order is a seeded shuffle and opaque ids are assigned after it, so position carries no
+    information about which direction or which sign a candidate holds. The validator checks the
+    composition rather than trusting the builder: exactly one no-op, both signs present for
+    every direction at every ratio, and one alpha per ratio.
+    """
+
+    trial_id: Identifier
+    study_id: Identifier
+    variant_id: Identifier
+    group_id: Identifier
+    prompt_role: PromptRole
+    kind: StateAuditCandidateKind
+    layer: int = Field(ge=0)
+    position_index: int
+    direction_family_id: Identifier
+    direction_family_hash: HashString
+    direction_count: int = Field(gt=0)
+    norm_ratios: list[float] = Field(min_length=1)
+    order_seed: int
+    candidates: list[StateAuditCandidate] = Field(min_length=2)
+    candidate_set_hash: HashString
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _check_set(self) -> StateAuditCandidateSet:
+        ids = [candidate.candidate_id for candidate in self.candidates]
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"trial {self.trial_id} has duplicate candidate ids")
+        if [c.order_index for c in self.candidates] != list(range(len(self.candidates))):
+            raise ValueError(
+                "candidates must be stored in application order with contiguous order_index "
+                "values starting at 0"
+            )
+
+        ratios = [float(ratio) for ratio in self.norm_ratios]
+        if ratios != sorted(ratios):
+            raise ValueError("norm_ratios must be ascending")
+        if len(set(ratios)) != len(ratios):
+            raise ValueError("norm_ratios must not repeat")
+        if any(ratio <= 0.0 for ratio in ratios):
+            raise ValueError("every norm ratio must be positive")
+        if self.kind is StateAuditCandidateKind.SELECTED_STRENGTH and len(ratios) != 1:
+            raise ValueError(
+                f"a {self.kind.value} set runs at exactly one ratio, got {len(ratios)}. The "
+                "five-ratio grid belongs to calibration and must not reach training or final test."
+            )
+
+        noops = [candidate for candidate in self.candidates if candidate.is_noop]
+        if len(noops) != 1:
+            raise ValueError(
+                f"trial {self.trial_id} has {len(noops)} no-op candidates; exactly one is "
+                "required as a live integrity control"
+            )
+
+        signed = [candidate for candidate in self.candidates if not candidate.is_noop]
+        expected_signed = 2 * self.direction_count * len(ratios)
+        if len(signed) != expected_signed:
+            raise ValueError(
+                f"trial {self.trial_id} has {len(signed)} signed candidates; "
+                f"{self.direction_count} directions at both signs across {len(ratios)} ratios is "
+                f"{expected_signed}"
+            )
+
+        wrong_place = [
+            candidate.candidate_id
+            for candidate in self.candidates
+            if candidate.layer != self.layer or candidate.position_index != self.position_index
+        ]
+        if wrong_place:
+            raise ValueError(
+                f"these candidates are not at the set's layer and position: {wrong_place[:5]}"
+            )
+
+        seen: dict[tuple[str, float, int], str] = {}
+        alphas: dict[float, float] = {}
+        for candidate in signed:
+            ratio = float(candidate.norm_ratio)
+            if ratio not in ratios:
+                raise ValueError(
+                    f"candidate {candidate.candidate_id} uses ratio {ratio}, which the set does "
+                    f"not declare ({ratios})"
+                )
+            key = (str(candidate.direction_ref), ratio, candidate.sign)
+            if key in seen:
+                raise ValueError(
+                    f"candidates {seen[key]} and {candidate.candidate_id} repeat the same "
+                    "direction, ratio, and sign"
+                )
+            seen[key] = candidate.candidate_id
+            existing = alphas.setdefault(ratio, candidate.global_alpha)
+            if existing != candidate.global_alpha:
+                raise ValueError(
+                    f"ratio {ratio} carries more than one alpha ({existing} and "
+                    f"{candidate.global_alpha}); the preregistered rule is one global alpha per "
+                    "layer and ratio, and a per-prompt strength would leak the prompt's state norm"
+                )
+
+        directions = sorted({str(candidate.direction_ref) for candidate in signed})
+        if len(directions) != self.direction_count:
+            raise ValueError(
+                f"trial {self.trial_id} cites {len(directions)} distinct directions but the set "
+                f"declares {self.direction_count}"
+            )
+        missing = [
+            f"{direction}@{ratio:g}{'+' if sign > 0 else '-'}"
+            for direction in directions
+            for ratio in ratios
+            for sign in (1, -1)
+            if (direction, ratio, sign) not in seen
+        ]
+        if missing:
+            raise ValueError(
+                f"trial {self.trial_id} is missing signed candidates: {missing[:5]}; every "
+                "direction must appear at both signs at every ratio"
+            )
+
+        recomputed = compute_state_audit_candidate_set_hash(self.model_dump(mode="json"))
+        if recomputed != self.candidate_set_hash:
+            raise ValueError(
+                f"candidate_set_hash {self.candidate_set_hash} does not match the set contents "
+                f"({recomputed}); the file has been edited since it was written"
+            )
+        return self
+
+
+class StateAuditCleanPassRecord(Versioned):
+    """One prompt's clean forward: its logits, its preferred answer, and its captured state.
+
+    Written before any intervention runs. It is the evidence behind two numbers a run manifest
+    reports as scalars: the reference norm, which is the median of the `state_norm` values here,
+    and the descriptive clean accuracy, which is their `clean_correct` rate. A reference norm
+    nobody can recompute is a number to be taken on trust.
+    """
+
+    study_id: Identifier
+    run_id: Identifier
+    trial_id: Identifier
+    variant_id: Identifier
+    group_id: Identifier
+    item_id: Identifier
+    prompt_role: PromptRole
+    prompt_hash: HashString
+    prompt_token_count: int = Field(gt=0)
+    position_index: int
+    position_absolute: int = Field(ge=0)
+
+    clean_logits: dict[str, float]
+    clean_preferred_label: str
+    clean_top_margin: float
+    clean_entropy: float
+    dataset_answer_label: str
+    clean_correct: bool
+
+    layer: int = Field(ge=0)
+    state_id: Identifier
+    state_dim: int = Field(gt=0)
+    state_norm: float = Field(gt=0.0)
+    state_shard_hash: HashString
+
+    model_id: str
+    model_revision: str
+    prompt_manifest_hash: HashString
+    scientific_result: Literal[False] = False
+    observed_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _check_clean_pass(self) -> StateAuditCleanPassRecord:
+        try:
+            logits = validate_answer_logits(self.clean_logits, "clean logits")
+            expected_label = preferred_label(logits)
+            expected_margin = preferred_margin(logits, expected_label)
+        except TargetError as error:
+            raise ValueError(str(error)) from error
+
+        if self.clean_preferred_label != expected_label:
+            raise ValueError(
+                f"clean_preferred_label {self.clean_preferred_label!r} does not match the "
+                f"recomputed {expected_label!r}"
+            )
+        if abs(self.clean_top_margin - expected_margin) > TARGET_TOLERANCE:
+            raise ValueError(
+                f"clean_top_margin {self.clean_top_margin} does not match the recomputed "
+                f"{expected_margin}"
+            )
+        if self.dataset_answer_label not in ANSWER_LABELS:
+            raise ValueError(
+                f"dataset_answer_label {self.dataset_answer_label!r} is not one of "
+                f"{list(ANSWER_LABELS)}"
+            )
+        if self.clean_correct != (self.clean_preferred_label == self.dataset_answer_label):
+            raise ValueError(
+                "clean_correct disagrees with the preferred and dataset labels recorded beside it"
+            )
+        if not math.isfinite(self.state_norm):
+            raise ValueError(f"state_norm {self.state_norm!r} is not finite")
+        if not math.isfinite(self.clean_entropy) or self.clean_entropy < 0.0:
+            raise ValueError(f"clean_entropy {self.clean_entropy!r} must be finite and >= 0")
+        return self
+
+
+class StateAuditRunDiagnostics(Base):
+    """Engineering measurements from one study run.
+
+    These describe whether the harness worked, not whether the model is good at anything.
+    Effect statistics appear here because an engineering run should say what it saw, and they
+    are explicitly not inputs to ratio or layer selection: the calibration selector reads
+    `CalibrationRatioSummary` records built from calibration-role observations only.
+    """
+
+    max_abs_noop_target: float = Field(ge=0.0)
+    max_abs_noop_delta_norm: float = Field(ge=0.0)
+    max_intervention_reconstruction_error: float = Field(ge=0.0)
+    min_target: float
+    max_target: float
+    median_abs_target: float = Field(ge=0.0)
+    p95_abs_target: float = Field(ge=0.0)
+    fraction_above_effect_threshold: float = Field(ge=0.0, le=1.0)
+    effect_threshold: float = Field(gt=0.0)
+    flip_count: int = Field(ge=0)
+    capture_hooks_fired: int = Field(ge=0)
+    intervention_hooks_fired: int = Field(ge=0)
+    state_dim: int = Field(gt=0)
+    min_state_norm: float = Field(gt=0.0)
+    max_state_norm: float = Field(gt=0.0)
+    median_method: str
+    percentile_method: str
+
+    @model_validator(mode="after")
+    def _check_ranges(self) -> StateAuditRunDiagnostics:
+        if self.min_target > self.max_target:
+            raise ValueError(f"min_target {self.min_target} exceeds max_target {self.max_target}")
+        if self.min_state_norm > self.max_state_norm:
+            raise ValueError("min_state_norm exceeds max_state_norm")
+        return self
+
+
+STUDY_RUN_HASHED_FIELDS = (
+    "schema_version",
+    "study_id",
+    "run_id",
+    "run_role",
+    "model_id",
+    "model_revision",
+    "tokenizer_revision",
+    "dtype",
+    "device",
+    "target_name",
+    "prompt_manifest_id",
+    "prompt_manifest_hash",
+    "prompt_role",
+    "direction_family_id",
+    "direction_family_hash",
+    "calibration_plan_id",
+    "calibration_plan_hash",
+    "layer",
+    "capture_position",
+    "norm_ratio",
+    "reference_norm",
+    "global_alpha",
+    "reference_norm_source",
+    "expected_prompt_count",
+    "expected_candidates_per_prompt",
+    "expected_non_noop_observations",
+    "expected_noop_observations",
+    "expected_forward_count",
+    "observed_prompt_count",
+    "observed_state_count",
+    "observed_non_noop_observations",
+    "observed_noop_observations",
+    "observed_forward_count",
+    "failure_count",
+    "clean_scored_count",
+    "clean_correct_count",
+    "clean_accuracy_descriptive",
+    "diagnostics",
+    "observations_hash",
+    "failures_hash",
+    "states_hash",
+    "candidate_sets_hash",
+    "clean_pass_hash",
+    "input_fingerprint",
+    "config_hash",
+    "status",
+)
+
+
+def study_run_payload(dumped: dict[str, Any]) -> dict[str, Any]:
+    missing = [name for name in STUDY_RUN_HASHED_FIELDS if name not in dumped]
+    if missing:
+        raise ValueError(f"study run dump is missing hashed fields: {missing}")
+    return {name: dumped[name] for name in STUDY_RUN_HASHED_FIELDS}
+
+
+def compute_study_run_hash(dumped: dict[str, Any]) -> str:
+    return hash_object(study_run_payload(dumped))
+
+
+class StudyRunManifest(Versioned):
+    """What one state-dependence run did, and whether it finished.
+
+    `status` is derived, not asserted. The validator refuses a manifest that calls itself
+    complete while a count is short or a failure was recorded, so a run that went wrong stays
+    visibly wrong instead of being written up as a run that worked.
+    """
+
+    study_id: Identifier
+    run_id: Identifier
+    run_role: StudyRunRole
+
+    model_id: str
+    model_revision: str
+    tokenizer_revision: str
+    dtype: str
+    device: str
+
+    target_name: Literal["delta_clean_top_margin"] = "delta_clean_top_margin"
+    prompt_manifest_id: Identifier
+    prompt_manifest_hash: HashString
+    prompt_role: PromptRole
+    direction_family_id: Identifier
+    direction_family_hash: HashString
+    calibration_plan_id: Identifier
+    calibration_plan_hash: HashString
+
+    layer: int = Field(ge=0)
+    capture_position: int
+    norm_ratio: float = Field(gt=0.0)
+    reference_norm: float = Field(gt=0.0)
+    global_alpha: float = Field(gt=0.0)
+    reference_norm_source: str
+
+    expected_prompt_count: int = Field(gt=0)
+    expected_candidates_per_prompt: int = Field(gt=0)
+    expected_non_noop_observations: int = Field(gt=0)
+    expected_noop_observations: int = Field(gt=0)
+    expected_forward_count: int = Field(gt=0)
+
+    observed_prompt_count: int = Field(ge=0)
+    observed_state_count: int = Field(ge=0)
+    observed_non_noop_observations: int = Field(ge=0)
+    observed_noop_observations: int = Field(ge=0)
+    observed_forward_count: int = Field(ge=0)
+    failure_count: int = Field(ge=0)
+
+    clean_scored_count: int = Field(ge=0)
+    clean_correct_count: int = Field(ge=0)
+    clean_accuracy_descriptive: float | None = None
+
+    diagnostics: StateAuditRunDiagnostics
+    observations_hash: HashString
+    failures_hash: HashString | None = None
+    states_hash: HashString
+    candidate_sets_hash: HashString
+    clean_pass_hash: HashString
+    input_fingerprint: HashString
+
+    config_hash: HashString
+    status: Literal["complete", "failed"]
+    manifest_hash: HashString
+
+    scientific_result: Literal[False] = False
+    config_path: str
+    code_commit: str | None = None
+    code_branch: str | None = None
+    code_dirty: bool | None = None
+    environment: dict[str, Any] = Field(default_factory=dict)
+    provenance: list[ArtifactHashRecord] = Field(default_factory=list)
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def _check_run(self) -> StudyRunManifest:
+        candidates = self.expected_candidates_per_prompt
+        planned = [
+            (
+                "expected_non_noop_observations",
+                self.expected_non_noop_observations,
+                self.expected_prompt_count * (candidates - 1),
+            ),
+            (
+                "expected_noop_observations",
+                self.expected_noop_observations,
+                self.expected_prompt_count,
+            ),
+            (
+                "expected_forward_count",
+                self.expected_forward_count,
+                self.expected_prompt_count * (1 + candidates),
+            ),
+        ]
+        wrong = [
+            f"{name} is {actual}, expected {expected}"
+            for name, actual, expected in planned
+            if actual != expected
+        ]
+        if wrong:
+            raise ValueError(f"the planned run arithmetic does not add up: {wrong}")
+
+        expected_alpha = self.norm_ratio * self.reference_norm
+        if abs(self.global_alpha - expected_alpha) > 1e-9 * max(1.0, abs(expected_alpha)):
+            raise ValueError(
+                f"global_alpha {self.global_alpha} is not norm_ratio * reference_norm "
+                f"({expected_alpha}); the strength rule is ratio times the reference norm"
+            )
+
+        if self.clean_correct_count > self.clean_scored_count:
+            raise ValueError("clean_correct_count exceeds clean_scored_count")
+        if self.clean_scored_count == 0:
+            if self.clean_accuracy_descriptive is not None:
+                raise ValueError("clean accuracy must be null when nothing was scored")
+        else:
+            expected_accuracy = self.clean_correct_count / self.clean_scored_count
+            if self.clean_accuracy_descriptive is None or (
+                abs(self.clean_accuracy_descriptive - expected_accuracy) > 1e-9
+            ):
+                raise ValueError(
+                    f"clean_accuracy_descriptive {self.clean_accuracy_descriptive} does not match "
+                    f"clean_correct_count / clean_scored_count ({expected_accuracy})"
+                )
+
+        shortfalls = [
+            name
+            for name, actual, expected in (
+                ("prompts", self.observed_prompt_count, self.expected_prompt_count),
+                ("states", self.observed_state_count, self.expected_prompt_count),
+                (
+                    "non-noop observations",
+                    self.observed_non_noop_observations,
+                    self.expected_non_noop_observations,
+                ),
+                (
+                    "no-op observations",
+                    self.observed_noop_observations,
+                    self.expected_noop_observations,
+                ),
+                ("forwards", self.observed_forward_count, self.expected_forward_count),
+            )
+            if actual != expected
+        ]
+        complete = not shortfalls and self.failure_count == 0
+        if self.status == "complete" and not complete:
+            raise ValueError(
+                f"run {self.run_id} calls itself complete but {self.failure_count} failures were "
+                f"recorded and these counts do not match the plan: {shortfalls}. A run that did "
+                "not finish must stay marked failed."
+            )
+        if self.status == "failed" and complete:
+            raise ValueError(
+                f"run {self.run_id} is marked failed but every count matches the plan and no "
+                "failure was recorded; a successful run must not be filed as a failure"
+            )
+
+        recomputed = compute_study_run_hash(self.model_dump(mode="json"))
+        if recomputed != self.manifest_hash:
+            raise ValueError(
+                f"manifest_hash {self.manifest_hash} does not match the run contents "
+                f"({recomputed}); the file has been edited since it was written"
+            )
+        return self
+
+
+# ---------------------------------------------------------------------------
+# Run-level records
+# ---------------------------------------------------------------------------
 
 
 class RunManifest(Versioned):

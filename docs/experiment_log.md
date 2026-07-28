@@ -441,11 +441,120 @@ multi-second import; that import is now lazy.
 Suite after this slice: **543 passed, 1 skipped** (400 before, 143 added). Ruff, ruff format,
 pyright, and `csf doctor` clean.
 
+## 2026-07-28: eight-prompt engineering smoke on real Gemma weights (engineering, not a result)
+
+**This is the first BlueDot step that produced measured numbers. It is engineering validation of
+the pipeline, not calibration and not a scientific result.** Four things about it need to be
+read together with every number below:
+
+* **The smoke is not calibration.** Calibration runs over the 32 calibration prompts, which are
+  disjoint from these 8, and it is what selects the study's intervention strength.
+* **The smoke ratio was chosen arbitrarily in advance.** 0.10 is the middle grid point, fixed at
+  G3 in `docs/bluedot/execution_decision_tree.md` before any number existed, precisely so that it
+  could not be chosen later from an effect distribution.
+* **The effect sizes below do not select the scientific ratio or the layer.** Nothing reads them.
+  `csf calibration summarize` refuses observations whose prompt role is not `calibration`, so a
+  strength cannot be chosen from prompts that were not set aside to choose it.
+* **No forecasting result exists.** No forecaster has been fitted, no forecast has been
+  committed, and no method has been compared to another.
+
+Commands, both under `HF_HUB_OFFLINE=1`:
+
+```powershell
+uv run csf state-audit smoke --config configs/state_audit/bluedot_smoke.yaml --run-id bluedot-smoke-layer13
+uv run csf state-audit verify-run --run-id bluedot-smoke-layer13 --compare-run-id bluedot-smoke-layer13-determinism
+```
+
+Every value in the two tables below is read from the verified run artifact at
+`results/runs/bluedot-smoke-layer13/state_audit_run.json`.
+
+| Field | Value |
+| --- | --- |
+| Run id | `bluedot-smoke-layer13` |
+| Run role | `engineering_smoke`, `scientific_result: false` |
+| Run manifest hash | `sha256:6f16b22d9887bcff38e3192205e3cf74f9c794b709437fa9d78a664276c67b3f` |
+| Model | `google/gemma-3-1b-it` at `dcc83ea841ab6100d6b47a070329e1ba4cf78752`, cpu / float32 |
+| Tokenizer revision | `dcc83ea841ab6100d6b47a070329e1ba4cf78752` |
+| Prompt manifest | `bluedot_state_dependence_v1`, `sha256:bf351c9d73042fcb3d0cdcb18247ded3411413d73000e047f1ba6ba9ab5b25b9` |
+| Direction family | `bluedot_state_dependence_directions_v1`, `sha256:809fbb5b033da740a01574ad5a0ca48f34baca38eef1504a0d66bba8e2fb9138` |
+| Calibration plan | `bluedot_state_dependence_calibration_v1`, `sha256:a212c6e80f96db55e1aeb0b1879fef441aa6d893a73b7fc43a94142913f97877` |
+| Target | `delta_clean_top_margin` |
+| Layer / position | 13, final prompt token |
+| Smoke ratio | 0.10 (arbitrary, fixed in advance) |
+| Measured reference norm | 5333.741678562916 (median clean residual-stream norm over the 8 smoke prompts) |
+| Measured global alpha | 533.3741678562916 |
+| State dimension | 1152 |
+| Clean state norms | min 5213.35039708892, max 5470.21262227147 |
+
+| Count | Value |
+| --- | --- |
+| Prompts | 8 of 8 |
+| Captured clean states | 8 |
+| Non-no-op observations | 128 |
+| No-op observations | 8 |
+| Total observations | 136 |
+| Failures | 0 |
+| Forward passes | 144 of 144 |
+
+Integrity, all measured rather than assumed. Capture hooks fired 8 of 8, intervention hooks 136
+of 136. Worst absolute no-op target **0.0**, well inside the `1.0e-3` tolerance; worst no-op
+`delta_norm` **0.0**, so no no-op moved the residual stream at all. The intervened state,
+re-read at layer 13 after the intervention hook in the same forward, matched
+`h + sign * alpha * d` with a worst absolute error of **0.0** over all 136 candidates. One global
+alpha was used for every non-no-op observation, and the verifier recomputed both the reference
+norm and the alpha from the recorded clean state norms and got the same numbers. Artifact
+verification: `valid: true`, no failures.
+
+Determinism. A second execution of the identical command into `bluedot-smoke-layer13-determinism`
+reproduced all 136 targets and all intervened logits with a maximum absolute difference of
+**0.0**, and produced an identical reference norm and alpha. Re-running the *same* run id was
+refused, as designed: a completed run is never rewritten, because its artifacts are the only
+record of what happened.
+
+**Clean accuracy, descriptive only: 4 of 8 correct (0.5).** Eight ARC-Challenge items is a
+scoring smoke check on a 1B model, not a capability measurement, and it is reported here only
+because a clean pass that scored nothing would mean the scoring path was not exercised. It has no
+bearing on the study, whose target is defined against the model's own clean preferred answer
+rather than against the dataset key, and no prompt is dropped for being answered wrongly.
+
+**Effect distribution, engineering diagnostics only**, over the 128 non-no-op observations at
+ratio 0.10:
+
+| Statistic | Value |
+| --- | --- |
+| Minimum target | -7.536674499511719 |
+| Maximum target | 4.735845565795898 |
+| Median absolute target | 1.242666244506836 |
+| 95th percentile absolute target | 4.652635002136229 |
+| Fraction with absolute target >= 0.10 | 0.953125 (122 of 128) |
+| Answer flips | 38 of 128 |
+
+Median convention `numpy.median` (even samples average the two central values); percentile
+convention `numpy.quantile(method='linear')`.
+
+One observation worth writing down now rather than being surprised by later: that 95th percentile
+of 4.65 sits above the preregistered C5 ceiling of 4.0. **This is not a calibration failure and it
+does not move the grid.** C5 is evaluated at G4 over the 32 calibration prompts, which are
+disjoint from these 8, and if it fails there for ratio 0.10 the selector will take the smallest
+ratio that does pass. Recording the observation here costs nothing and removes the option of
+presenting it later as a discovery.
+
+Implementation notes. The execution path reuses the one validated inference path throughout:
+`models.capture` for every forward, `models.scoring.score_logits` for every answer-logit read,
+and `interventions.tensor_ops` for every intervention, converted from a study candidate into the
+harness's own `InterventionSpec`. The benchmark's four-candidate builder, its `delta_margin`
+observations, and `csf trials resolve` are untouched. Study artifacts are prefixed
+`state_audit_*` so a study run directory can never be read as a benchmark trial run.
+
+Suite after this slice: **645 passed, 1 skipped** (543 before, 102 added), all offline and all
+passing before any weights were loaded. Ruff, ruff format, pyright, and `csf doctor` clean.
+
 ## Next entry
 
-The next steps are B2b, the fixed 16-dimensional intervention projection matrix, and the
-commitment-protocol hardening. Both need no model. Running the real calibration sweep (B3b) is a
-separate maintainer decision and is the first step in this arm that produces measured numbers.
+The next steps are B2b, the fixed 16-dimensional intervention projection matrix, and B5, the
+commitment-protocol hardening. Neither needs a model. Running the real calibration sweep (B3b) is
+a separate maintainer decision and is the first step in this arm that produces a number the study
+acts on.
 
 No CSF-Bench scientific result exists yet, and none should be reported until a real comparison
 has been run and verified.

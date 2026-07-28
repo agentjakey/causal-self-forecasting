@@ -4,6 +4,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added (2026-07-28, BlueDot slices B4 and B11: study candidates and the engineering smoke)
+
+* `state_audit/candidates.py`: two explicit builders rather than one with a flag.
+  `selected_strength_templates` gives 8 directions x 2 signs at one ratio plus a no-op (17),
+  which smoke, training, and final test use; `calibration_grid_templates` gives 8 x 2 x 5 ratios
+  plus one shared no-op (81), which only calibration uses. Order is a seeded shuffle and opaque
+  ids are assigned after it, so position encodes nothing.
+* `StateAuditCandidate` and `StateAuditCandidateSet`. A candidate cites the opaque direction id,
+  that direction's vector hash, the sign, the layer, the ratio, the global alpha, and a hash of
+  the signed intervention itself; the set cites the family hash and its own content hash. The
+  record type refuses an id or a direction reference that names a construction role, an answer
+  label, a random-control label, or a semantic family, and the set validator refuses more than
+  one alpha at a ratio, a missing sign, a missing no-op, or a five-ratio grid handed to a
+  selected-strength role. The public view narrows further to operation, layer, position, and
+  strength, so a control and a steer are indistinguishable.
+* `state_audit/run.py`: the real execution path. Clean forward and layer capture per prompt, one
+  global alpha frozen from the median clean state norm, all 17 candidates applied, the target
+  computed and stored, and every failure preserved in its own artifact. It reuses the one
+  validated inference path throughout, converting each study candidate into the harness's own
+  `InterventionSpec` rather than adding a second way to run a forward.
+* `state_audit/verify.py`: artifact-only verification. Recomputes the manifest's content hash,
+  every artifact hash, every observation's target from its own logits, the reference norm from
+  the recorded clean state norms, and the single global alpha. `compare_runs` compares two runs
+  of the same inputs row by row, which is how cross-process determinism is measured. A test
+  asserts the module names no model-loading or forward-pass function at all.
+* `StudyRunRole` (`engineering_smoke`, `calibration`, `training`, `final_test_unresolved`,
+  `final_test_resolved`), `StudyRunManifest`, `StateAuditCleanPassRecord`, and
+  `StateAuditRunDiagnostics`. The run manifest derives its `status` rather than asserting it: it
+  refuses to call itself complete while a count is short or a failure was recorded, so a run that
+  went wrong stays visibly wrong. `scientific_result` is `Literal[False]`.
+* `StateAuditObservationRecord` now records `pre_norm`, `post_norm`, and `delta_norm`, and
+  refuses a no-op that displaced the residual stream at all.
+* `csf state-audit smoke` and `csf state-audit verify-run`. The smoke command refuses any run
+  role but the engineering smoke, any prompt role but `smoke`, any layer but 13, any ratio but
+  the preregistered arbitrary 0.10, role counts that disagree with the frozen manifest, a hidden
+  dimension that disagrees with the direction family, a dirty direction family, a prompt manifest
+  that no longer matches the prepared task, and a completed run at the same run id.
+  `verify-run` loads no model.
+* `StateAuditRunConfig` and `configs/state_audit/bluedot_smoke.yaml`; `csf doctor` validates
+  `configs/state_audit`.
+* `csf calibration summarize` now refuses observations whose prompt role is not `calibration`, so
+  smoke, training, or final-test effect sizes cannot choose the study's intervention strength.
+* 102 offline tests covering both candidate shapes, opacity and leakage, ordering and hash
+  stability, the run and clean-pass record validators, every config and command refusal, failure
+  preservation, artifact verification, a full eight-prompt fixture smoke on a locally built
+  14-block model, a deterministic fixture rerun, and an assertion that the benchmark's
+  four-candidate builder is unchanged.
+
+### Executed (2026-07-28)
+
+* The eight-prompt engineering smoke on the pinned `google/gemma-3-1b-it` at
+  `dcc83ea841ab6100d6b47a070329e1ba4cf78752`: 144 forwards, 136 observations, no failures,
+  verified, `scientific_result: false`. It is plumbing validation, not calibration; the ratio and
+  layer were both fixed in advance and its effect sizes select nothing. Measured values are in
+  `docs/experiment_log.md`.
+
 ### Added (2026-07-28, BlueDot slice B3a: study target and calibration rules)
 
 * `state_audit_target.py`: the arm's target `delta_clean_top_margin`, as pure float64 functions

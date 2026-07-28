@@ -36,6 +36,17 @@ RUN_LOG = "run.log.jsonl"
 BENCHMARK = "benchmark.json"
 BENCHMARK_ITEMS = "benchmark_items.jsonl"
 
+# BlueDot state-dependence artifacts. Prefixed so a study run directory is never confused with
+# a benchmark trial run: the two hold different targets, and `csf trials resolve` must not read
+# a study run's observations as if they carried `delta_margin`.
+STATE_AUDIT_RUN_MANIFEST = "state_audit_run.json"
+STATE_AUDIT_OBSERVATIONS = "state_audit_observations.jsonl"
+STATE_AUDIT_FAILURES = "state_audit_failures.jsonl"
+STATE_AUDIT_CANDIDATE_SETS = "state_audit_candidate_sets.jsonl"
+STATE_AUDIT_STATE_REFS = "state_audit_state_refs.jsonl"
+STATE_AUDIT_STATES = "state_audit_states.npz"
+STATE_AUDIT_CLEAN_PASS = "state_audit_clean_pass.jsonl"
+
 
 def data_dir() -> Path:
     return repo_root() / "data"

@@ -22,6 +22,7 @@ from ..hashing import read_jsonl
 from ..schemas import (
     CalibrationPlanRecord,
     CalibrationRatioSummary,
+    PromptRole,
     StateAuditObservationRecord,
 )
 from .criteria import EffectSample, summarize_ratio
@@ -109,6 +110,21 @@ def summarize_layer(
         raise ObservationLoadError(
             f"observations at layer {layer} carry targets {sorted(wrong_target)}, but the plan "
             f"calibrates {plan.target_name!r}"
+        )
+
+    # Only calibration-role prompts may decide a ratio. The engineering smoke runs at a ratio
+    # chosen arbitrarily in advance, and letting its effect sizes reach the selector would mean
+    # the study's intervention strength was picked from prompts that were never meant to choose
+    # it. Training and final-test observations are outcomes and must never select a stimulus.
+    wrong_role = sorted(
+        {record.prompt_role.value for record in at_layer} - {PromptRole.CALIBRATION.value}
+    )
+    if wrong_role:
+        raise ObservationLoadError(
+            f"observations at layer {layer} carry prompt roles {wrong_role}; only "
+            f"{PromptRole.CALIBRATION.value!r} prompts may be summarized for a calibration "
+            "decision, because a ratio chosen from any other role would be chosen from data that "
+            "was not set aside to choose it"
         )
 
     noops = [record for record in at_layer if record.is_noop]

@@ -49,6 +49,7 @@ from ..paths import (
 )
 from ..schemas import (
     CalibrationRunManifest,
+    CleanPassRunManifest,
     StateAuditCandidateSet,
     StateAuditCleanPassRecord,
     StateAuditObservationRecord,
@@ -299,18 +300,38 @@ def _check_reference_norm(
         for ratio, _ in manifest_strengths(manifest)
     }
 
-    if abs(recomputed - manifest.reference_norm) > NORM_TOLERANCE * max(1.0, recomputed):
-        failures.append(
-            f"the reference norm recomputes as {recomputed} from the recorded clean state norms "
-            f"but the manifest records {manifest.reference_norm}"
-        )
-    for ratio, recorded_alpha in manifest_strengths(manifest):
-        expected = recomputed_alphas[f"{ratio:g}"]
-        if abs(expected - recorded_alpha) > NORM_TOLERANCE * max(1.0, expected):
+    # Two provenances, and only one of them may be checked by recomputation.
+    #
+    # A calibration run derives its reference norm from its own prompts, so recomputing the median
+    # from the recorded norms must reproduce it exactly. A training or final-test run *inherits*
+    # the strength calibration chose; its own prompts have a different median, and recomputing
+    # from them and demanding a match would fail a run that did exactly the right thing.
+    #
+    # Which applies is read from `reference_norm_source`, which is inside the manifest's hashed
+    # payload: editing it to dodge this check changes the manifest hash and the manifest stops
+    # loading at all.
+    inherited = manifest.reference_norm_source.startswith("inherited from the calibration")
+    if inherited:
+        for ratio, recorded_alpha in manifest_strengths(manifest):
+            expected = ratio * manifest.reference_norm
+            if abs(expected - recorded_alpha) > NORM_TOLERANCE * max(1.0, expected):
+                failures.append(
+                    f"the inherited alpha for ratio {ratio} is {recorded_alpha} but ratio times "
+                    f"the inherited reference norm is {expected}"
+                )
+    else:
+        if abs(recomputed - manifest.reference_norm) > NORM_TOLERANCE * max(1.0, recomputed):
             failures.append(
-                f"the alpha for ratio {ratio} recomputes as {expected} but the manifest records "
-                f"{recorded_alpha}"
+                f"the reference norm recomputes as {recomputed} from the recorded clean state "
+                f"norms but the manifest records {manifest.reference_norm}"
             )
+        for ratio, recorded_alpha in manifest_strengths(manifest):
+            expected = recomputed_alphas[f"{ratio:g}"]
+            if abs(expected - recorded_alpha) > NORM_TOLERANCE * max(1.0, expected):
+                failures.append(
+                    f"the alpha for ratio {ratio} recomputes as {expected} but the manifest "
+                    f"records {recorded_alpha}"
+                )
 
     dims = sorted({record.state_dim for record in clean_records})
     if dims != [manifest.diagnostics.state_dim]:
@@ -335,7 +356,11 @@ def _check_reference_norm(
         )
 
     return {
-        "recomputed_reference_norm": recomputed,
+        "reference_norm_inherited": inherited,
+        "recorded_reference_norm": manifest.reference_norm,
+        # This run's own median. It equals the recorded reference norm for a calibration run and
+        # is a diagnostic for an inherited one, where the two are supposed to differ.
+        "own_prompt_median_state_norm": recomputed,
         "recomputed_global_alphas": recomputed_alphas,
         "median_method": MEDIAN_METHOD,
         "clean_state_count": len(clean_records),
@@ -404,9 +429,26 @@ def _check_calibration_artifacts(
     return report
 
 
+def _require_intervened_run(run_id: str) -> StateAuditRunBase:
+    """Load a run that applied interventions, refusing a clean-only one.
+
+    A clean-only run has no observations, no candidate sets, and no targets, so almost every
+    check below would be vacuous on it. It has its own checkpoint verifier, and pointing at that
+    is more useful than reporting a long list of things that were never supposed to be there.
+    """
+    manifest = load_state_audit_run_manifest(run_id)
+    if isinstance(manifest, CleanPassRunManifest):
+        raise StateAuditRunError(
+            f"run {run_id!r} is a clean-only final-test stage: it applied no intervention and has "
+            "no observations to verify. Use `csf state-audit verify-commitments` for the "
+            "commitment checkpoint."
+        )
+    return manifest
+
+
 def verify_run(run_id: str, noop_tolerance: float | None = None) -> dict[str, Any]:
     """Verify one state-dependence run from its artifacts. Loads no model."""
-    manifest = load_state_audit_run_manifest(run_id)
+    manifest = _require_intervened_run(run_id)
     directory = run_dir(run_id)
     failures: list[str] = []
 
@@ -514,8 +556,8 @@ def compare_runs(run_id: str, other_run_id: str, tolerance: float = 0.0) -> dict
     pinned weights has no reason to move at all; a looser tolerance may be passed to quantify
     drift rather than to excuse it.
     """
-    left = load_state_audit_run_manifest(run_id)
-    right = load_state_audit_run_manifest(other_run_id)
+    left = _require_intervened_run(run_id)
+    right = _require_intervened_run(other_run_id)
 
     mismatches: list[str] = []
     for name, a, b in (

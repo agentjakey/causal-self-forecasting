@@ -1,0 +1,48 @@
+# Training run for the BlueDot state-dependence arm.
+#
+# Gate G6 in docs/bluedot/execution_decision_tree.md. 96 prompts x (1 clean forward + 17
+# candidates) = 1,728 forwards, at the strength calibration chose.
+#
+# The strength is inherited, not recomputed. `calibration_decision_run_id` points at the
+# calibration run whose decision selected layer 13 at ratio 0.02, and the run refuses to start if
+# that decision selected a different layer or ratio. A training run that derived its own alpha
+# from its own prompts would be fitting predictors on a different stimulus than the final test
+# will be scored on.
+name: bluedot_state_dependence_training
+study_id: bluedot_state_dependence
+
+run_role: training
+prompt_role: training
+candidate_kind: selected_strength
+
+target: delta_clean_top_margin
+
+model_ref: configs/models/gemma3_1b_it.yaml
+task_ref: configs/tasks/arc_mcq.yaml
+
+prompt_manifest_id: bluedot_state_dependence_v1
+direction_family_id: bluedot_state_dependence_directions_v1
+calibration_plan_id: bluedot_state_dependence_calibration_v1
+projection_id: bluedot_state_dependence_projection_v1
+calibration_decision_run_id: bluedot-calibration-layer13
+
+layer: 13
+capture_position: -1
+
+# The calibrated ratio. Asserted here and checked against the decision record; the run refuses
+# if the two disagree.
+norm_ratio: 0.02
+
+expected_prompt_count: 96
+expected_direction_count: 8
+expected_signed_directions: 16
+expected_hidden_dim: 1152
+expected_role_counts:
+  smoke: 8
+  calibration: 32
+  training: 96
+  final_test: 32
+
+master_seed: 20260727
+noop_tolerance: 1.0e-3
+effect_report_threshold: 0.10

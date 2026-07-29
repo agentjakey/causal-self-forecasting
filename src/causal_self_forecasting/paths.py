@@ -52,6 +52,14 @@ STATE_AUDIT_REFERENCE_NORM = "state_audit_reference_norm.json"
 STATE_AUDIT_RATIO_SUMMARIES = "state_audit_ratio_summaries.json"
 STATE_AUDIT_DECISION = "state_audit_calibration_decision.json"
 
+# Fitting and commitment artifacts. The fit records live in the training run because that is the
+# run whose prompts they were fitted on; the pairing and the commitment summary live in the
+# final-test run because that is what they describe.
+STATE_AUDIT_TRANSFORM_FITS = "state_audit_transform_fits.jsonl"
+STATE_AUDIT_PREDICTORS = "state_audit_predictors.jsonl"
+STATE_AUDIT_PAIRING = "state_audit_wrong_state_pairing.json"
+STATE_AUDIT_COMMITMENT_SUMMARY = "state_audit_commitment_summary.json"
+
 
 def data_dir() -> Path:
     return repo_root() / "data"
@@ -106,6 +114,29 @@ def calibration_plans_dir() -> Path:
 
 def calibration_plan_path(plan_id: str) -> Path:
     return calibration_plans_dir() / f"{plan_id}.json"
+
+
+def projections_dir() -> Path:
+    """Where the fixed intervention projection lives.
+
+    Tracked, like the other frozen artifacts. The matrix is 1152 x 16 float32, about 74 KB, and
+    it is cited by every forecast; regenerating it from the seed is checked rather than relied
+    on, so the artifact of record is committed.
+    """
+    return data_dir() / "projections"
+
+
+def projection_path(projection_id: str) -> Path:
+    return projections_dir() / f"{projection_id}.json"
+
+
+def state_audit_fits_dir() -> Path:
+    """Where fitted transforms and predictors live.
+
+    Not tracked: these are fitted objects whose provenance records are written into the training
+    run directory alongside them, and they are regenerable from that run.
+    """
+    return artifacts_dir() / "state_audit_fits"
 
 
 def artifacts_dir() -> Path:

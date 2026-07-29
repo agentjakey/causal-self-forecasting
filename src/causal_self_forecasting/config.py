@@ -331,6 +331,12 @@ class StateAuditRunConfig(Base):
     prompt_manifest_id: str
     direction_family_id: str
     calibration_plan_id: str
+    projection_id: str | None = None
+    # Set on training and final-test runs. The intervention strength those roles use is the one
+    # calibration chose, not one recomputed from their own prompts: a training run that derived
+    # its own alpha from the training states would be using a different stimulus than the study
+    # calibrated, and the number would drift with whichever prompts happened to be in the role.
+    calibration_decision_run_id: str | None = None
 
     layer: int
     capture_position: int = -1

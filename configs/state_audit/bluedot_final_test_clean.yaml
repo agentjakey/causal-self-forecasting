@@ -1,0 +1,44 @@
+# Final-test clean stage for the BlueDot state-dependence arm.
+#
+# Gate G7. 32 clean forwards and nothing else: clean logits and layer-13 states, so that features
+# and the wrong-state pairing can be built and forecasts committed **before** any final-test
+# intervention exists.
+#
+# This config is used by `csf state-audit final-test-clean`, which builds no candidate set and
+# registers no intervention hook. The strength below is cited so the forecasts can describe the
+# interventions they predict; it is not applied here.
+name: bluedot_state_dependence_final_test_clean
+study_id: bluedot_state_dependence
+
+run_role: final_test_unresolved
+prompt_role: final_test
+candidate_kind: selected_strength
+
+target: delta_clean_top_margin
+
+model_ref: configs/models/gemma3_1b_it.yaml
+task_ref: configs/tasks/arc_mcq.yaml
+
+prompt_manifest_id: bluedot_state_dependence_v1
+direction_family_id: bluedot_state_dependence_directions_v1
+calibration_plan_id: bluedot_state_dependence_calibration_v1
+projection_id: bluedot_state_dependence_projection_v1
+calibration_decision_run_id: bluedot-calibration-layer13
+
+layer: 13
+capture_position: -1
+norm_ratio: 0.02
+
+expected_prompt_count: 32
+expected_direction_count: 8
+expected_signed_directions: 16
+expected_hidden_dim: 1152
+expected_role_counts:
+  smoke: 8
+  calibration: 32
+  training: 96
+  final_test: 32
+
+master_seed: 20260727
+noop_tolerance: 1.0e-3
+effect_report_threshold: 0.10

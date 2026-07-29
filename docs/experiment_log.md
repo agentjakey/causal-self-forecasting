@@ -651,11 +651,179 @@ almost exactly the 2x upper end of the long-prompt band that record predicted. A
 much longer than the 53-token prompt that was timed. The arm's remaining forwards
 (1,728 training and 576 final test) should therefore cost roughly 36 minutes rather than 18.
 
+## 2026-07-29: training, final-test clean stage, and 512 committed forecasts
+
+**No forecasting result exists.** No final-test intervention has been applied, so no forecast has
+been scored and no method has been compared to another. This entry records that the forecasts were
+made and sealed, not how good they are.
+
+Commands, all under `HF_HUB_OFFLINE=1`:
+
+```powershell
+uv run csf state-audit projection --config configs/state_audit/bluedot_training.yaml --projection-id bluedot_state_dependence_projection_v1
+uv run csf state-audit train --config configs/state_audit/bluedot_training.yaml --run-id bluedot-training
+uv run csf state-audit verify-run --run-id bluedot-training
+uv run csf state-audit final-test-clean --config configs/state_audit/bluedot_final_test_clean.yaml --run-id bluedot-final-test
+uv run csf state-audit commit-forecasts --training-config configs/state_audit/bluedot_training.yaml --training-run-id bluedot-training --final-test-config configs/state_audit/bluedot_final_test_clean.yaml --final-test-run-id bluedot-final-test --projection-id bluedot_state_dependence_projection_v1
+uv run csf state-audit verify-commitments --run-id bluedot-final-test
+```
+
+### The fixed intervention projection
+
+Frozen at `data/projections/bluedot_state_dependence_projection_v1.json`, matrix hash
+`sha256:0e4207cd69e52567fa703e95811772b3d31dabac3622d1fb1324133bcdad0328`, 1152 x 16, derived seed
+726760915. Orthonormality error 7.83e-09. Regenerating from the recorded seed reproduces the matrix
+hash exactly, and a rerun reports `unchanged`.
+
+Injectivity on the 16 realized signed vectors: rank preserved, smallest nonzero singular value
+2.986e-09, **retention 0.0828** of the realized set's own smallest nonzero singular value. The tiny
+absolute number is a fact about the direction family, not about the projection: the preregistration
+records that the four raw centered answer directions sum to zero, so the answer family spans three
+dimensions and the eight directions together are near-degenerate in their eighth. The projection
+preserves the rank and retains 8 percent of that last, barely-present dimension. Worth stating
+plainly: the eighth dimension of the intervention description is weakly represented for every
+method equally, and no method is advantaged by it.
+
+### Training run
+
+| Field | Value |
+| --- | --- |
+| Run id | `bluedot-training`, role `training`, status `complete` |
+| Manifest hash | `sha256:5cc27ff6865f2d3e0b06809f1fbc21f6348acfb3327463cd62bf6f40fd35a394` |
+| Strength | ratio 0.02, alpha **106.87158268272867**, inherited from `bluedot-calibration-layer13` |
+| Reference norm | 5343.579134136434, the calibration one, not recomputed |
+| Prompts / states | 96 / 96 |
+| Signed observations | 1,536 (96 x 16) |
+| No-op observations | 96 |
+| Total observations | 1,632 |
+| Forward passes | **1,728** of 1,728 |
+| Failures | **0** |
+| Wall clock | 1,578.9 s = **26.3 min**, 0.9137 s per forward |
+
+Artifact hashes: observations
+`sha256:08cc61b07e60a53079fe7c11feba9efcdfa35f6d3e8f7f5361dc987193d99498`; states
+`sha256:54bccc868d7b3c097411da1b28472a71c23cce98e37b914ceeef7a887951cc0d`; candidate sets
+`sha256:4695a01cd9cf209f2bc542f0972d664f561dd927ea9b8c799f9a2533fcc3046b`; clean pass
+`sha256:0dfcbdfa19e5cd389028f15556c32b82da773e98902e2aad971d5663456aae86`. No failures file.
+
+Integrity: capture hooks fired 96 of 96, intervention hooks 1,632 of 1,632, worst absolute no-op
+target **0.0**, worst no-op displacement **0.0**, worst intervention reconstruction error **0.0**
+across all 1,632 candidates. One global alpha across every signed observation. Clean accuracy,
+descriptive only: 51 of 96 (0.53125). Effect diagnostics at the selected strength: median absolute
+target 0.2625, p95 1.1480, range -3.2161 to 1.7481, 45 flips, 76.6 percent at or above 0.10.
+
+**The strength was inherited, not recomputed.** The training prompts' own median clean state norm
+is 5354.131610730348, which is *not* the number the run used. Using it would have meant fitting
+predictors on a slightly different stimulus than the final test is scored on. The verifier knows
+the difference and checks the inheritance rather than the recomputation; that distinction was a
+real bug caught by the verifier on this run's first pass.
+
+### Final-test clean stage
+
+| Field | Value |
+| --- | --- |
+| Run id | `bluedot-final-test`, role `final_test_unresolved`, status `complete` |
+| Manifest hash | `sha256:9eb48bc1320fce00fe7f131179adf1bd1a6a43d0991f863f7d7c2f2bf6aa0306` |
+| Prompts / states | 32 / 32 |
+| Clean forwards | 32 |
+| **Interventions applied** | **0** (a typed literal zero on the record) |
+| Failures | 0 |
+| State dimension | 1152, norms 5106.567 to 5514.780 |
+| Clean accuracy, descriptive | 15 of 32 (0.46875) |
+
+Clean pass `sha256:dde87e2f54212389774a1137ef5ab764f00ee064760375d131992628437391da`, states
+`sha256:b116514ead78619b355ff0dc3f18e99f525e5d5990368321007840878293b269`.
+
+### Fitted transforms and predictors
+
+All fitted on the 96 training prompts only. Every record names the same prompt-identity hash
+`sha256:3508c5d589c40d7628545533722128b663b3bc45333866e00618e9d663596536`, and the fit prompt set is
+disjoint from the final-test set.
+
+| Transform | Output | Parameters | Hash |
+| --- | --- | --- | --- |
+| `bluedot_tfidf_svd_v1` | 32 | vocabulary 1,216, realized components 32 | `sha256:2822acad39bc1b2921c4c278b2478eff86b9d891e497786575aa04dd46bfa309` |
+| `bluedot_state_pca_v1` | 16 | 1152 in, 16 components | `sha256:1adcf672ad8242e0d9eca759a4488123f369f75d50f287d0e472dc60b77ae6ca` |
+| `bluedot_standardizer_v1` | 327 | four blocks | `sha256:f59ff9d5aeed580e6e9018f6cc004f589dbba181ee0720313f7660287a98ae4b` |
+
+The realized `k_svd` is 32, the full preregistered width: the training vocabulary holds 1,216
+features, so `min(32, 1215, 95)` is 32.
+
+| Method | Blocks | Width | Rows | Ridge alpha | CV MAE | At grid edge |
+| --- | --- | --- | --- | --- | --- | --- |
+| `intervention_only_ridge` | I | 16 | 1,536 | 100 | 0.338847 | no |
+| `visible_information_ridge` | I+V | 55 | 1,536 | 1,000 | 0.343321 | no |
+| `state_bilinear_ridge` | I+V+S+SxI | 327 | 1,536 | 10,000 | 0.361691 | **yes** |
+
+Coefficient hashes: `sha256:b73418506a76fefa962b0d79e5e84575abaa185c028cccf7e3c524ad8ebe895a`,
+`sha256:f115e3359a346a6b96f686b66b539f06bda9bc5d4a29a5d5eefa17220b2b66e7`,
+`sha256:1f3ed9c2b318e59e5e55897a3781dbdfd1640241e142a725ba71df06570a8e3a`. Predictor hashes:
+`sha256:bb3f9c50b8072aeb1c852d06bdf147a36dbdaa690f73d701942322f7dd40aafa`,
+`sha256:93eae8c2af661aaf92a35f35a165dbe34790abe5026a4f13c0605ff958141086`,
+`sha256:18fb0c192613f42787e062131d2b4b742bda24d4ce73758b8466576297acffb2`.
+
+**Two things here need saying without spin.**
+
+The state-conditioned ridge's selected alpha, 10,000, is **at the top edge of the preregistered
+grid**. Gate G6 anticipated this: record it and proceed, because moving the grid after seeing
+training results is a researcher degree of freedom. It is recorded and the run proceeded. It means
+the 327-feature model wanted more regularization than the grid offers, which is what a wide feature
+set on 1,536 rows over 96 groups tends to want.
+
+And the cross-validated training-fold errors run in the **opposite** direction to the study's
+hypothesis: 0.3388 for intervention-only, 0.3433 for visible-information, 0.3617 for the
+state-conditioned bilinear. On training folds the state block is not helping; it is costing. These
+are training-fold diagnostics and not the test — the preregistered comparison is on the 32
+final-test prompts, prompt-aggregated, and those outcomes do not exist yet. But it would be
+dishonest to record these numbers without noting which way they point. H-BD1 currently looks
+unlikely to be supported, and section 12 of the preregistration already records that a
+visible-information tie counts **against** a hidden-state advantage.
+
+### Wrong-state pairing
+
+`sha256:6ff60988532fcbd8d362d7c6220f4afefd58536896c29b635438c7a5d21737d0`, written before any
+commitment. 32 matched donors, **0 self-matches**, and all 32 matched a donor with the same clean
+preferred answer, so step 2 of the rule never had to fall back. Median margin distance 0.2703, worst
+4.2265. Ten seeded derangements, **0 fixed points** across all ten.
+
+### Commitments
+
+**512 commitments: 32 prompts x 16 method-and-condition records.** 512 forecast records, 512 salt
+files, 16 distinct method-conditions, each covering all 17 candidates.
+
+| Method and condition | Records |
+| --- | --- |
+| `constant` at `none` | 32 |
+| `prompt_lexical` at `none` | 32 |
+| `intervention_only_ridge` at `none` | 32 |
+| `visible_information_ridge` at `none` | 32 |
+| `state_bilinear_ridge` at `true` | 32 |
+| `state_bilinear_ridge` at `wrong_example`, index 0 | 32 |
+| `state_bilinear_ridge` at `shuffled`, indices 0-9 | 320 |
+
+Candidate sets `sha256:398525203cbd327109c17d98eca9a7c84685286323b1328db18a641254ca27d8`, forecasts
+`sha256:e5a932530d0e204a7141dff27a5fc29ca655543725b0966cbc008c2105d453ec`, commitments
+`sha256:da1eb015a9f367dac44f3621401ea2a2d46d8745142b219676b23442caab6ad8`. Last commitment at
+2026-07-29T18:33:12.405883Z.
+
+`csf state-audit verify-commitments` returns `valid: true` with no failures, **0 reveals**, and
+`final_test_outcomes_exist: false`. Zero reveals is correct and required: the salts stay sealed
+until the interventions are resolved, and only then can a third party recompute the hashes.
+
+Interval endpoints and flip probabilities in every ridge forecast are **placeholders**, as
+preregistration section 15 conflict S4 requires: the interval is the training-residual spread and
+the flip probability is the training flip base rate of 0.029297. `p_bias_suppressed` and
+`p_hidden_bias_active` are 0.5 throughout; this arm has no model organism for either to be about.
+
+**The study is now at the commitment checkpoint and stops here.** No final-test intervention has
+been applied.
+
 ## Next entry
 
-The next steps are B2b, the fixed 16-dimensional intervention projection matrix, and B5, the
-commitment-protocol hardening. Neither needs a model. After those, the training run at the
-selected strength is the next thing that touches the weights.
+Final-test resolution (G9) applies the 17 candidates to each of the 32 final-test prompts, 544
+intervened forwards, and is the first thing that produces a final-test outcome. It must not run
+until the commitments above are intended to be resolved, because resolving them is irreversible:
+the blinding cannot be restored.
 
 No CSF-Bench scientific result exists yet, and none should be reported until a real comparison
 has been run and verified.

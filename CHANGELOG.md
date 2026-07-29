@@ -4,6 +4,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added (2026-07-29, BlueDot slices B2b and B5 through B9: the precommitted forecasting stage)
+
+* `state_audit/projection.py`: the fixed `1152 x 16` intervention projection. Generated once from
+  the master seed, never fitted, stored, hashed, and cited by every forecast, so every method
+  receives the identical `P^T v`. Injectivity is checked as **rank preservation plus retention**,
+  not as an absolute singular-value floor: the answer-token family is near-degenerate by
+  construction, so an absolute floor would measure the direction family's conditioning and call
+  it a property of the projection.
+* Commitment hardening. The key is now
+  `(trial_id, method_id, state_condition, condition_index)` in the record, the duplicate check,
+  and the salt filename, so the twelve state-conditioned records per prompt no longer collide and
+  no salt overwrites another. `SelectionReveal` gained a **no-selection** shape for all-candidate
+  runs. `commit_forecast` refuses once any outcome artifact exists, which is the only defence
+  against "resolve, look, commit" that timestamps cannot provide.
+  `verify_commitment_ordering` checks the sequence from artifacts.
+* `state_audit/features.py`: the four blocks, at the preregistered widths, with the intervention
+  block shared identically by every method and the visible block containing no state-derived
+  quantity. `forecasting.TrainingExample` is untouched; this arm has its own example type.
+* `state_audit/fit.py`: the three ridges, six-fold grouped cross-validation over training prompt
+  groups with no group on both sides of a fold, and the preregistered alpha grid. Ties break
+  toward the stronger regularizer.
+* `state_audit/matching.py`: the deterministic nearest matched wrong state by the five-step rule,
+  and ten seeded derangements with no fixed point.
+* `state_audit/predict.py`: fitting from the training run, the frozen final-test candidate sets,
+  and the full commitment pass.
+* `TransformFitRecord`, `RidgeSelectionRecord`, `StateAuditPredictorRecord`,
+  `WrongStatePairingRecord`, `InterventionProjectionRecord`, and `CleanPassRunManifest`, whose
+  `intervention_count` is a typed literal zero.
+* `csf state-audit train`, `projection`, `final-test-clean`, `commit-forecasts`, and
+  `verify-commitments`. Training and final test inherit their strength from the calibration
+  decision rather than recomputing it.
+
 ### Changed (2026-07-29, publication readiness)
 
 * `README.md` rewritten as a research landing page: the question in plain English, what is and is

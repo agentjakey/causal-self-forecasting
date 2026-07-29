@@ -776,6 +776,10 @@ class ForecastRecord(Versioned):
 
     This is the object that gets canonicalized and committed. Nothing about the outcome may
     appear in it.
+
+    `condition_index` distinguishes the ten seeded state permutations from each other. Without
+    it the state-dependence arm would commit twelve records per prompt under keys that collide,
+    and the duplicate check would reject the run.
     """
 
     trial_id: Identifier
@@ -783,6 +787,7 @@ class ForecastRecord(Versioned):
     candidate_forecasts: list[ForecastCandidate] = Field(min_length=1)
     p_hidden_bias_active: Probability
     state_condition: StateCondition = StateCondition.TRUE
+    condition_index: int = Field(default=0, ge=0)
     optional_report: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
@@ -799,10 +804,17 @@ class ForecastCommitment(Versioned):
 
     The salt is absent by construction. It is written to a separate reveal record only after
     the intervention has been selected and applied.
+
+    The key is `(trial_id, method_id, state_condition, condition_index)`. A method-name suffix
+    convention would work equally well right up until someone forgot it, and nothing could
+    enforce it; carrying the condition in typed fields means the duplicate check and the salt
+    path derive from the same four values.
     """
 
     trial_id: Identifier
     method_id: Identifier
+    state_condition: StateCondition = StateCondition.TRUE
+    condition_index: int = Field(default=0, ge=0)
     commitment_hash: HashString
     forecast_ref: str
     committed_at: datetime = Field(default_factory=utc_now)
@@ -813,17 +825,47 @@ class SelectionReveal(Versioned):
 
     `verified` is recorded rather than asserted, so that a failed verification survives in
     the artifact instead of crashing the run and disappearing.
+
+    Two shapes. A selecting reveal names the candidate a seed chose. A **no-selection** reveal
+    discloses the salt and verifies the hash without choosing anything, which is what an
+    all-candidate run needs: every candidate is resolved, so there is nothing to select, and a
+    protocol that demanded a selection would make such a run unverifiable.
     """
 
     trial_id: Identifier
     method_id: Identifier
-    selection_seed_hash: HashString
-    selected_intervention_id: Identifier
-    selected_index: int = Field(ge=0)
+    state_condition: StateCondition = StateCondition.TRUE
+    condition_index: int = Field(default=0, ge=0)
+    selection_seed_hash: HashString | None = None
+    selected_intervention_id: Identifier | None = None
+    selected_index: int | None = Field(default=None, ge=0)
+    no_selection: bool = False
     salt_hex: str = Field(min_length=32)
     commitment_hash: HashString
     verified: bool
     revealed_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _check_selection(self) -> SelectionReveal:
+        selected = (self.selected_intervention_id, self.selected_index)
+        if self.no_selection:
+            if any(value is not None for value in selected):
+                raise ValueError(
+                    "a no-selection reveal must not name a selected candidate; every candidate "
+                    "was resolved, so there was nothing to select"
+                )
+            if self.selection_seed_hash is not None:
+                raise ValueError(
+                    "a no-selection reveal must not cite a selection seed; no seed was drawn"
+                )
+        else:
+            if any(value is None for value in selected):
+                raise ValueError(
+                    "a selecting reveal requires both selected_intervention_id and selected_index"
+                )
+            if self.selection_seed_hash is None:
+                raise ValueError("a selecting reveal must cite the seed hash that chose it")
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -2216,6 +2258,453 @@ class CalibrationRunManifest(StateAuditRunBase):
                 f"manifest_hash {self.manifest_hash} does not match the run contents "
                 f"({recomputed}); the file has been edited since it was written"
             )
+        return self
+
+
+# ---------------------------------------------------------------------------
+# The BlueDot state-dependence arm: transforms, predictors, and the wrong-state pairing
+#
+# Everything here is fitted, and everything fitted is fitted on the 96 training prompts only.
+# The records exist so that the fit boundary is checkable after the fact rather than asserted:
+# each one names the exact prompt ids it saw, and a record naming a calibration or final-test
+# prompt does not load.
+# ---------------------------------------------------------------------------
+
+
+class InterventionProjectionRecord(Versioned):
+    """The fixed `1152 x 16` map every method uses to describe an intervention.
+
+    Never fitted, so it has no training-boundary exposure and is identical for calibration,
+    training, and final test. The validator recomputes nothing about the matrix itself; the
+    matrix lives beside this record and is checked against `matrix_hash` when it loads.
+    """
+
+    projection_id: Identifier
+    study_id: Identifier
+    algorithm_version: str
+    random_generator: str
+    seed_label: str
+    master_seed: int
+    derived_seed: int
+
+    hidden_dim: int = Field(gt=0)
+    components: int = Field(gt=0)
+    orthonormality_error: float = Field(ge=0.0)
+    orthonormality_tolerance: float = Field(gt=0.0)
+    realized_vector_count: int = Field(ge=0)
+    # The smallest nonzero singular value of the projected realized set, and how much of the
+    # set's own smallest nonzero singular value survived. The second is the one that says
+    # something about the projection: the direction family is near-degenerate by construction,
+    # so the absolute magnitude is largely a fact about the family.
+    injectivity_margin: float = Field(ge=0.0)
+    injectivity_retention: float = Field(ge=0.0)
+
+    direction_family_id: Identifier | None = None
+    direction_family_hash: HashString | None = None
+    matrix_hash: HashString
+    scientific_result: Literal[False] = False
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _check_projection(self) -> InterventionProjectionRecord:
+        if self.components > self.hidden_dim:
+            raise ValueError(
+                f"{self.components} orthonormal columns do not fit in {self.hidden_dim} dimensions"
+            )
+        if self.orthonormality_error > self.orthonormality_tolerance:
+            raise ValueError(
+                f"orthonormality error {self.orthonormality_error} exceeds the tolerance "
+                f"{self.orthonormality_tolerance} this projection was accepted under"
+            )
+        return self
+
+
+class FeatureBlock(StrEnum):
+    """The four feature blocks, named so a substitution can replace one and nothing else."""
+
+    INTERVENTION = "intervention"
+    VISIBLE = "visible"
+    STATE = "state"
+    STATE_INTERVENTION = "state_intervention"
+
+
+class TransformFitRecord(Versioned):
+    """One fitted transform, with the exact training prompts it was fitted on.
+
+    `fit_prompt_ids` is the point. A transform fitted on anything outside the training role
+    would contaminate the comparison, and the validator refuses a record whose declared role is
+    not `training`.
+    """
+
+    transform_id: Identifier
+    study_id: Identifier
+    kind: str
+    fit_prompt_role: PromptRole
+    fit_prompt_ids: list[str] = Field(min_length=1)
+    fit_prompt_identity_hash: HashString
+    fit_row_count: int = Field(gt=0)
+    output_dim: int = Field(gt=0)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    master_seed: int
+    prompt_manifest_hash: HashString
+    transform_hash: HashString
+    scientific_result: Literal[False] = False
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _check_fit_boundary(self) -> TransformFitRecord:
+        if self.fit_prompt_role is not PromptRole.TRAINING:
+            raise ValueError(
+                f"transform {self.transform_id} declares fit role {self.fit_prompt_role.value!r}; "
+                "every fitted object in this arm is fitted on the training prompts only"
+            )
+        if len(set(self.fit_prompt_ids)) != len(self.fit_prompt_ids):
+            raise ValueError("fit_prompt_ids must not repeat")
+        if self.fit_prompt_ids != sorted(self.fit_prompt_ids):
+            raise ValueError("fit_prompt_ids must be sorted, for a stable identity hash")
+        if hash_object(self.fit_prompt_ids) != self.fit_prompt_identity_hash:
+            raise ValueError("fit_prompt_identity_hash does not match the listed prompt ids")
+        return self
+
+
+class RidgeFoldResult(Base):
+    """One grouped cross-validation fold at one regularization strength."""
+
+    fold_index: int = Field(ge=0)
+    ridge_alpha: float = Field(gt=0.0)
+    held_out_groups: int = Field(gt=0)
+    held_out_rows: int = Field(gt=0)
+    fit_rows: int = Field(gt=0)
+    mean_absolute_error: float = Field(ge=0.0)
+
+
+class RidgeSelectionRecord(Base):
+    """How one method's regularization strength was chosen.
+
+    The grid is preregistered and so is the rule: lowest mean absolute error across the six
+    folds, ties broken toward the stronger regularizer. `alpha_at_grid_edge` is reported rather
+    than acted on, because moving the grid after seeing training results is a researcher degree
+    of freedom the preregistration does not allow.
+    """
+
+    method_id: Identifier
+    alpha_grid: list[float] = Field(min_length=1)
+    fold_count: int = Field(gt=0)
+    fold_results: list[RidgeFoldResult] = Field(min_length=1)
+    mean_absolute_error_by_alpha: dict[str, float]
+    selected_alpha: float = Field(gt=0.0)
+    selected_alpha_mae: float = Field(ge=0.0)
+    alpha_at_grid_edge: bool
+
+    @model_validator(mode="after")
+    def _check_selection(self) -> RidgeSelectionRecord:
+        if self.selected_alpha not in self.alpha_grid:
+            raise ValueError(
+                f"selected alpha {self.selected_alpha} is not on the preregistered grid "
+                f"{self.alpha_grid}"
+            )
+        best = min(self.mean_absolute_error_by_alpha.values())
+        if abs(self.selected_alpha_mae - best) > 1e-12:
+            raise ValueError(
+                f"selected alpha reports MAE {self.selected_alpha_mae} but the best on the grid "
+                f"is {best}; the rule is the lowest cross-validated error"
+            )
+        edge = self.selected_alpha in (min(self.alpha_grid), max(self.alpha_grid))
+        if self.alpha_at_grid_edge != edge:
+            raise ValueError("alpha_at_grid_edge disagrees with the selected alpha and the grid")
+        return self
+
+
+class StateAuditPredictorRecord(Versioned):
+    """A fitted predictor, frozen before any final-test outcome exists.
+
+    `feature_blocks` is what makes the comparison legible: the visible model and the
+    state-conditioned model differ in exactly which blocks they receive, and the widths are
+    checked against the preregistered ones.
+    """
+
+    predictor_id: Identifier
+    study_id: Identifier
+    method_id: Identifier
+    feature_blocks: list[FeatureBlock] = Field(min_length=1)
+    block_widths: dict[str, int]
+    feature_dim: int = Field(gt=0)
+    training_rows: int = Field(gt=0)
+    training_prompt_count: int = Field(gt=0)
+    ridge_selection: RidgeSelectionRecord
+
+    # Placeholders, not predictions. `ForecastCandidate` requires an interval and a flip
+    # probability; a ridge fitted on a continuous target estimates neither, so the interval is
+    # the training-residual spread and the flip probability is the training base rate. Section 15
+    # of the preregistration records this as conflict S4.
+    residual_q05: float
+    residual_q95: float
+    training_flip_base_rate: Probability
+
+    coefficient_hash: HashString
+    transform_ids: list[str] = Field(min_length=1)
+    prompt_manifest_hash: HashString
+    direction_family_hash: HashString
+    projection_hash: HashString
+    training_run_id: Identifier
+    predictor_hash: HashString
+    scientific_result: Literal[False] = False
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _check_predictor(self) -> StateAuditPredictorRecord:
+        if list(self.block_widths) != [block.value for block in self.feature_blocks]:
+            raise ValueError(
+                f"block_widths {list(self.block_widths)} does not match feature_blocks "
+                f"{[b.value for b in self.feature_blocks]}, in order"
+            )
+        total = sum(self.block_widths.values())
+        if total != self.feature_dim:
+            raise ValueError(f"block widths sum to {total} but feature_dim is {self.feature_dim}")
+        if FeatureBlock.STATE_INTERVENTION in self.feature_blocks and (
+            FeatureBlock.STATE not in self.feature_blocks
+            or FeatureBlock.INTERVENTION not in self.feature_blocks
+        ):
+            raise ValueError(
+                "an interaction block requires both the state and intervention blocks it is the "
+                "product of"
+            )
+        if self.residual_q05 > self.residual_q95:
+            raise ValueError("residual_q05 exceeds residual_q95")
+        return self
+
+
+CLEAN_RUN_HASHED_FIELDS = (
+    "schema_version",
+    "study_id",
+    "run_id",
+    "run_role",
+    "model_id",
+    "model_revision",
+    "tokenizer_revision",
+    "dtype",
+    "device",
+    "target_name",
+    "prompt_manifest_id",
+    "prompt_manifest_hash",
+    "prompt_role",
+    "direction_family_hash",
+    "calibration_plan_hash",
+    "calibration_decision_run_id",
+    "layer",
+    "capture_position",
+    "selected_norm_ratio",
+    "selected_global_alpha",
+    "expected_prompt_count",
+    "observed_prompt_count",
+    "observed_state_count",
+    "intervention_count",
+    "failure_count",
+    "clean_scored_count",
+    "clean_correct_count",
+    "clean_accuracy_descriptive",
+    "state_dim",
+    "min_state_norm",
+    "max_state_norm",
+    "clean_pass_hash",
+    "states_hash",
+    "failures_hash",
+    "config_hash",
+    "status",
+)
+
+
+def clean_run_payload(dumped: dict[str, Any]) -> dict[str, Any]:
+    missing = [name for name in CLEAN_RUN_HASHED_FIELDS if name not in dumped]
+    if missing:
+        raise ValueError(f"clean run dump is missing hashed fields: {missing}")
+    return {name: dumped[name] for name in CLEAN_RUN_HASHED_FIELDS}
+
+
+def compute_clean_run_hash(dumped: dict[str, Any]) -> str:
+    return hash_object(clean_run_payload(dumped))
+
+
+class CleanPassRunManifest(Versioned):
+    """A run that captured clean states and applied no intervention at all.
+
+    Deliberately not a `StateAuditRunBase`. That record cannot describe a run with no candidates,
+    and more to the point it should not be able to: the final-test clean stage exists precisely so
+    that the states and the clean outputs are available for feature construction and wrong-state
+    matching **before** any final-test outcome exists. `intervention_count` is a typed literal
+    zero, so a record of this shape claiming an intervention ran cannot be constructed.
+
+    It cites the strength the final test will eventually use. Citing is not applying: the number
+    is recorded so the forecasts can describe the interventions they are predicting.
+    """
+
+    study_id: Identifier
+    run_id: Identifier
+    run_role: StudyRunRole
+
+    model_id: str
+    model_revision: str
+    tokenizer_revision: str
+    dtype: str
+    device: str
+
+    target_name: Literal["delta_clean_top_margin"] = "delta_clean_top_margin"
+    prompt_manifest_id: Identifier
+    prompt_manifest_hash: HashString
+    prompt_role: PromptRole
+    direction_family_hash: HashString
+    calibration_plan_hash: HashString
+    calibration_decision_run_id: Identifier
+
+    layer: int = Field(ge=0)
+    capture_position: int
+    selected_norm_ratio: float = Field(gt=0.0)
+    selected_global_alpha: float = Field(gt=0.0)
+
+    expected_prompt_count: int = Field(gt=0)
+    observed_prompt_count: int = Field(ge=0)
+    observed_state_count: int = Field(ge=0)
+    intervention_count: Literal[0] = 0
+    failure_count: int = Field(ge=0)
+
+    clean_scored_count: int = Field(ge=0)
+    clean_correct_count: int = Field(ge=0)
+    clean_accuracy_descriptive: float | None = None
+    state_dim: int = Field(gt=0)
+    min_state_norm: float = Field(gt=0.0)
+    max_state_norm: float = Field(gt=0.0)
+
+    clean_pass_hash: HashString
+    states_hash: HashString
+    failures_hash: HashString | None = None
+    config_hash: HashString
+    status: Literal["complete", "failed"]
+    manifest_hash: HashString
+
+    scientific_result: Literal[False] = False
+    config_path: str
+    code_commit: str | None = None
+    code_branch: str | None = None
+    code_dirty: bool | None = None
+    environment: dict[str, Any] = Field(default_factory=dict)
+    provenance: list[ArtifactHashRecord] = Field(default_factory=list)
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def _check_clean_run(self) -> CleanPassRunManifest:
+        if self.run_role is not StudyRunRole.FINAL_TEST_UNRESOLVED:
+            raise ValueError(
+                f"a clean-only run is the unresolved final-test stage; got run role "
+                f"{self.run_role.value!r}"
+            )
+        if self.clean_correct_count > self.clean_scored_count:
+            raise ValueError("clean_correct_count exceeds clean_scored_count")
+        if self.clean_scored_count == 0:
+            if self.clean_accuracy_descriptive is not None:
+                raise ValueError("clean accuracy must be null when nothing was scored")
+        else:
+            expected = self.clean_correct_count / self.clean_scored_count
+            if self.clean_accuracy_descriptive is None or (
+                abs(self.clean_accuracy_descriptive - expected) > 1e-9
+            ):
+                raise ValueError(
+                    f"clean_accuracy_descriptive {self.clean_accuracy_descriptive} does not match "
+                    f"clean_correct_count / clean_scored_count ({expected})"
+                )
+        if self.min_state_norm > self.max_state_norm:
+            raise ValueError("min_state_norm exceeds max_state_norm")
+
+        complete = (
+            self.failure_count == 0
+            and self.observed_prompt_count == self.expected_prompt_count
+            and self.observed_state_count == self.expected_prompt_count
+        )
+        if self.status == "complete" and not complete:
+            raise ValueError(
+                f"run {self.run_id} calls itself complete but captured "
+                f"{self.observed_state_count} of {self.expected_prompt_count} states with "
+                f"{self.failure_count} failures"
+            )
+        if self.status == "failed" and complete:
+            raise ValueError("a successful clean pass must not be filed as a failure")
+
+        recomputed = compute_clean_run_hash(self.model_dump(mode="json"))
+        if recomputed != self.manifest_hash:
+            raise ValueError(
+                f"manifest_hash {self.manifest_hash} does not match the run contents "
+                f"({recomputed}); the file has been edited since it was written"
+            )
+        return self
+
+
+class WrongStateMatch(Base):
+    """One final-test prompt and the donor whose state substitutes for its own."""
+
+    variant_id: Identifier
+    donor_variant_id: Identifier
+    same_clean_preferred_label: bool
+    margin_distance: float = Field(ge=0.0)
+    entropy_distance: float = Field(ge=0.0)
+    eligible_donor_count: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def _check_no_self_match(self) -> WrongStateMatch:
+        if self.variant_id == self.donor_variant_id:
+            raise ValueError(
+                f"{self.variant_id} is its own donor; a wrong-state control that hands a prompt "
+                "its own state measures nothing"
+            )
+        return self
+
+
+class WrongStatePairingRecord(Versioned):
+    """The matched pairing and the ten seeded derangements, frozen before any outcome exists.
+
+    Written and hashed at G7, before commitment. The primary control is the deterministic
+    nearest match; the permutations are a robustness band around it, not ten separate tests.
+    """
+
+    pairing_id: Identifier
+    study_id: Identifier
+    prompt_role: PromptRole
+    layer: int = Field(ge=0)
+    matches: list[WrongStateMatch] = Field(min_length=1)
+    permutations: list[dict[str, str]] = Field(min_length=1)
+    permutation_seed_label: str
+    master_seed: int
+    prompt_manifest_hash: HashString
+    final_test_run_id: Identifier
+    pairing_hash: HashString
+    scientific_result: Literal[False] = False
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _check_pairing(self) -> WrongStatePairingRecord:
+        if self.prompt_role is not PromptRole.FINAL_TEST:
+            raise ValueError(
+                "the wrong-state pairing is drawn from the final-test prompts, so that the donor "
+                "pool has the same marginal state distribution as the targets"
+            )
+        targets = [match.variant_id for match in self.matches]
+        if len(set(targets)) != len(targets):
+            raise ValueError("a prompt appears twice in the matched pairing")
+        if targets != sorted(targets):
+            raise ValueError("matches must be sorted by variant id, for a stable identity")
+
+        known = set(targets)
+        for index, permutation in enumerate(self.permutations):
+            if set(permutation) != known:
+                raise ValueError(f"permutation {index} does not cover exactly the matched prompts")
+            fixed = sorted(key for key, value in permutation.items() if key == value)
+            if fixed:
+                raise ValueError(
+                    f"permutation {index} leaves {fixed[:3]} matched to their own state; a "
+                    "derangement has no fixed point"
+                )
+            if sorted(permutation.values()) != sorted(known):
+                raise ValueError(f"permutation {index} is not a bijection of the prompts")
         return self
 
 

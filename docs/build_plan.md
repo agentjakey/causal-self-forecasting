@@ -1,4 +1,4 @@
-# Build plan
+﻿# Build plan
 
 Living document. Status values: `not started`, `in progress`, `done`, `blocked`.
 
@@ -228,15 +228,15 @@ baselines, and it defers Phases 5, 6, and 8 through 13.
 | B0 | Preregistration and scope amendment | done, 2026-07-27 |
 | B1 | Prompt manifests: `PromptRole`, `PromptManifest`, `csf prompts manifest` | **done, 2026-07-27**; split frozen at `data/prompt_manifests/bluedot_state_dependence_v1.json` |
 | B2a | Direction bank: eight unit directions built from the pinned unembedding | **done, 2026-07-27**; family frozen at `data/direction_manifests/bluedot_state_dependence_directions_v1.json` |
-| B2b | The fixed 16-dimensional intervention projection matrix | not started |
+| B2b | The fixed 16-dimensional intervention projection matrix | **done, 2026-07-29**; frozen at `data/projections/bluedot_state_dependence_projection_v1.json` |
 | B3a | Study target `delta_clean_top_margin`, global strength rule, calibration schemas, thresholds, layer state machine, and the frozen plan | **done, 2026-07-28**; plan frozen at `data/calibration_plans/bluedot_state_dependence_calibration_v1.json` |
 | B3b | Running the real calibration sweep and producing a decision | **done, 2026-07-29**; `results/runs/bluedot-calibration-layer13`, `passed_primary`, layer 13 ratio 0.02, verified |
 | B4 | 17-candidate and 81-candidate study candidate sets | **done, 2026-07-28**; `state_audit/candidates.py`, both builders, opaque ids, public view |
-| B5 | Commitment-protocol hardening: extended key, no-selection reveal, pre-existing-outcome refusal | not started |
-| B6 | `StateAuditExample` and block-structured features | not started |
-| B7 | `TransformFitRecord` and fit-boundary enforcement | not started |
-| B8 | Three ridges and grouped cross-validation | not started |
-| B9 | Paired prompt bootstrap and prompt-first aggregation | not started |
+| B5 | Commitment-protocol hardening: extended key, no-selection reveal, pre-existing-outcome refusal | **done, 2026-07-29** |
+| B6 | `StateAuditExample` and block-structured features | **done, 2026-07-29**; `state_audit/features.py`, blocks 16/39/16/256 |
+| B7 | `TransformFitRecord` and fit-boundary enforcement | **done, 2026-07-29** |
+| B8 | Three ridges and grouped cross-validation | **done, 2026-07-29**; `state_audit/fit.py` |
+| B9 | Wrong-state matching and ten derangements | **done, 2026-07-29**; the paired prompt bootstrap is analysis (G11) and is not started |
 | B10 | `csf verify study` and `csf replay` | partial; `csf state-audit verify-run` verifies one run from artifacts with no model |
 | B11 | Smoke run (8 prompts) | **done, 2026-07-28**; `results/runs/bluedot-smoke-layer13`, 144 forwards, verified, `scientific_result: false` |
 | B12 | Calibration, training, final test | calibration **done, 2026-07-29**; training and final test not started, and both need B6 through B9 first |

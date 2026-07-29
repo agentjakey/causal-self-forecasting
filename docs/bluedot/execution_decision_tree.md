@@ -266,6 +266,16 @@ model. That is a real finding about the design and it is reported as one.
 
 ## G6. Training run and fits
 
+**Status: passed, 2026-07-29.** `results/runs/bluedot-training`, manifest hash
+`sha256:5cc27ff6865f2d3e0b06809f1fbc21f6348acfb3327463cd62bf6f40fd35a394`, 1,728 forwards, 1,632
+observations, no failures, verified. Strength inherited from the calibration decision: layer 13,
+ratio 0.02, alpha 106.87158268272867. All three ridges fitted on the 96 training prompts only.
+
+**One gate check to read carefully.** The alpha-interior check **failed** for`state_bilinear_ridge`: it selected 10,000, the top of the grid. This row says to record it and
+proceed, which is what happened. The other two methods selected interior values. Full numbers, and
+the cross-validated errors, are in `docs/experiment_log.md`.
+
+
 **Work:** 96 prompts at the selected layer and ratio, 17 candidates each, plus 96 clean forwards
 = **1,728 forwards**, roughly 14 minutes.
 
@@ -295,6 +305,12 @@ cause. Do not reuse the artifact.
 
 ## G7. Wrong-state matching and permutations
 
+**Status: passed, 2026-07-29.** Final-test clean stage `results/runs/bluedot-final-test`, 32 clean
+forwards and zero interventions. Pairing hash
+`sha256:6ff60988532fcbd8d362d7c6220f4afefd58536896c29b635438c7a5d21737d0`: 32 matched donors, no
+self-match, all 32 matched on the same clean preferred answer, ten derangements with no fixed point.
+
+
 **No forwards.** Build the deterministic nearest match for each of the 32 final-test prompts from
 the other 31, by the five-step rule in the preregistration, and the ten seeded derangements.
 
@@ -317,6 +333,15 @@ after commitment.
 **Fail branch:** fix and regenerate. Nothing here is scientific.
 
 ## G8. Final-test forecast commitment
+
+**Status: passed, 2026-07-29. The study is at this checkpoint now.** 512 commitments, 512 forecast
+records, 512 salt files, 16 distinct method-and-condition keys, each covering all 17 candidates.
+`csf state-audit verify-commitments` returns `valid: true` with no failures and
+`final_test_outcomes_exist: false`. Zero reveals, which is required: the salts stay sealed until
+resolution.
+
+**Nothing past this point has run.** G9 is the next step and it is irreversible.
+
 
 **No forwards. No outcomes may exist.**
 

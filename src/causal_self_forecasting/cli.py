@@ -705,6 +705,214 @@ def state_audit_calibrate(
         )
 
 
+@state_audit_app.command("train")
+def state_audit_train(
+    config: Path = typer.Option(..., "--config", help="Path to a training run config."),
+    run_id: str = typer.Option(..., "--run-id", help="Run id to write artifacts under."),
+    force: bool = typer.Option(False, "--force", help="Overwrite a partial or failed run."),
+) -> None:
+    """Run the 96-prompt training stage at the calibrated strength.
+
+    Loads the model. One clean forward per prompt plus all 17 candidates: 1,728 forwards. The
+    intervention strength is **inherited** from the calibration decision rather than recomputed,
+    so the predictors are fitted on the same stimulus the final test will be scored on.
+
+    This produces outcomes for the training prompts, which a predictor is allowed to learn from.
+    It touches no final-test prompt.
+    """
+    from .state_audit.run import StateAuditRunError, run_training
+
+    directory = ensure_run_dir(run_id)
+    configure_logging("INFO", log_file=directory / RUN_LOG)
+
+    try:
+        report = run_training(config, run_id, force=force)
+    except StateAuditRunError as error:
+        typer.secho(f"training run failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+    if report["status"] != "complete":
+        typer.secho(
+            f"run {run_id} did not complete: {report['counts']['failures']} failures were "
+            "recorded and the manifest is marked failed",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@state_audit_app.command("projection")
+def state_audit_projection(
+    config: Path = typer.Option(..., "--config", help="Path to a state-audit run config."),
+    projection_id: str = typer.Option(..., "--projection-id", help="Projection id to build."),
+    force: bool = typer.Option(False, "--force", help="Replace a different projection."),
+) -> None:
+    """Build the fixed 16-dimensional intervention projection. Loads no model weights.
+
+    Generated once from the master seed, stored, hashed, and cited by every forecast. It is never
+    fitted, so it has no training-boundary exposure and is identical for calibration, training,
+    and final test. Every method receives the same `P^T v`.
+    """
+    from .state_audit.predict import direction_vectors
+    from .state_audit.projection import (
+        ProjectionError,
+        build_projection,
+        verify_projection,
+        write_projection,
+    )
+    from .state_audit.run import StateAuditRunError, resolve_run_inputs
+
+    try:
+        inputs = resolve_run_inputs(config)
+        vectors = direction_vectors(inputs.config.direction_family_id)
+        record, matrix = build_projection(
+            projection_id=projection_id,
+            study_id=inputs.config.study_id,
+            hidden_dim=inputs.family.hidden_dim,
+            components=16,
+            master_seed=inputs.config.master_seed,
+            direction_vectors=vectors,
+            direction_family_id=inputs.family.family_id,
+            direction_family_hash=inputs.family.family_hash,
+        )
+        path, status = write_projection(record, matrix, force=force)
+        verification = verify_projection(projection_id)
+    except (ProjectionError, StateAuditRunError) as error:
+        typer.secho(f"projection failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(
+        {
+            "status": status,
+            "manifest_path": str(path),
+            "projection_id": record.projection_id,
+            "matrix_hash": record.matrix_hash,
+            "hidden_dim": record.hidden_dim,
+            "components": record.components,
+            "orthonormality_error": record.orthonormality_error,
+            "injectivity_margin": record.injectivity_margin,
+            "realized_vector_count": record.realized_vector_count,
+            "derived_seed": record.derived_seed,
+            "verification": verification,
+            "scientific_result": False,
+        }
+    )
+    if not verification["valid"]:
+        typer.secho(
+            f"the projection did not verify: {verification['failures']}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@state_audit_app.command("final-test-clean")
+def state_audit_final_test_clean(
+    config: Path = typer.Option(..., "--config", help="Path to a final-test clean config."),
+    run_id: str = typer.Option(..., "--run-id", help="Run id to write artifacts under."),
+    force: bool = typer.Option(False, "--force", help="Overwrite a partial or failed run."),
+) -> None:
+    """Capture clean logits and states for the final-test prompts. Applies no intervention.
+
+    Loads the model for one forward per prompt. No candidate set is built and no intervention
+    hook is registered, so the run produces no outcome; that is what lets a forecast committed
+    afterwards still be a forecast. The manifest's `intervention_count` is a typed literal zero.
+    """
+    from .state_audit.run import StateAuditRunError, execute_clean_only
+
+    directory = ensure_run_dir(run_id)
+    configure_logging("INFO", log_file=directory / RUN_LOG)
+
+    try:
+        report = execute_clean_only(config, run_id, force=force)
+    except StateAuditRunError as error:
+        typer.secho(f"final-test clean stage failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+    if report["status"] != "complete":
+        typer.secho(
+            f"run {run_id} did not complete: {report['counts']['failures']} failures",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@state_audit_app.command("commit-forecasts")
+def state_audit_commit_forecasts(
+    training_config: Path = typer.Option(..., "--training-config", help="Training run config."),
+    training_run_id: str = typer.Option(..., "--training-run-id", help="Completed training run."),
+    final_test_config: Path = typer.Option(
+        ..., "--final-test-config", help="Final-test clean config."
+    ),
+    final_test_run_id: str = typer.Option(
+        ..., "--final-test-run-id", help="Completed final-test clean run."
+    ),
+    projection_id: str = typer.Option(..., "--projection-id", help="Intervention projection id."),
+) -> None:
+    """Fit the predictors and commit every final-test forecast. Loads no model.
+
+    Fits the transforms and the three ridges on the 96 training prompts only, builds the
+    wrong-state pairing and the ten derangements, then predicts all 17 candidates for each of the
+    32 final-test prompts under all 16 method-and-condition combinations and commits 512 records.
+
+    It refuses to run if any outcome artifact exists in the final-test run directory. That refusal
+    is the blinding: correct-looking timestamps prove nothing on their own.
+    """
+    from .state_audit.predict import PredictError, commit_final_test_forecasts
+    from .state_audit.run import StateAuditRunError
+
+    directory = ensure_run_dir(final_test_run_id)
+    configure_logging("INFO", log_file=directory / RUN_LOG)
+
+    try:
+        report = commit_final_test_forecasts(
+            training_config,
+            training_run_id,
+            final_test_config,
+            final_test_run_id,
+            projection_id,
+        )
+    except (PredictError, StateAuditRunError) as error:
+        typer.secho(f"commitment failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+    if not report["verification"]["valid"]:
+        typer.secho(
+            f"the commitment checkpoint did not verify: {report['verification']['failures']}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@state_audit_app.command("verify-commitments")
+def state_audit_verify_commitments(
+    run_id: str = typer.Option(..., "--run-id", help="Final-test run id to verify."),
+    output: Path | None = typer.Option(None, "--output", help="Write the report to a file."),
+) -> None:
+    """Verify the commitment checkpoint from artifacts. Loads no model.
+
+    Checks the key structure, that every commitment has a forecast and its own salt, that no
+    interval is inverted, and that no final-test outcome artifact exists. No reveal is expected
+    here and none should exist: the salts stay sealed until the interventions are resolved.
+    """
+    from .state_audit.predict import verify_final_test_commitments
+
+    report = verify_final_test_commitments(run_id)
+    _echo_json(report)
+    if output is not None:
+        atomic_write_json(output, report)
+    if not report["valid"]:
+        typer.secho(
+            f"run {run_id} did not verify: {report['failures']}", fg=typer.colors.RED, err=True
+        )
+        raise typer.Exit(code=1)
+
+
 @state_audit_app.command("verify-run")
 def state_audit_verify_run(
     run_id: str = typer.Option(..., "--run-id", help="State-audit run id to verify."),

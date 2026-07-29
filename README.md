@@ -221,8 +221,43 @@ uv run csf state-audit verify-run --run-id bluedot-calibration-layer13
 The layer-20 fallback has its own config and is refused unless `--primary-run-id` names a layer-13
 run whose decision record says `fallback_required`, so it cannot become a second attempt.
 
-**7. Training, forecasters, and final test.** Not implemented. This is where a result would come
-from, and none exists.
+**7. The fixed intervention projection.** Loads no model weights. Generated once from the master
+seed, never fitted, and cited by every forecast.
+
+```powershell
+uv run csf state-audit projection --config configs/state_audit/bluedot_training.yaml --projection-id bluedot_state_dependence_projection_v1
+```
+
+**8. Training.** 96 prompts, 1,728 forwards, at the strength calibration chose. The strength is
+inherited from the calibration decision, not recomputed, so predictors are fitted on the same
+stimulus the final test will be scored on.
+
+```powershell
+uv run csf state-audit train --config configs/state_audit/bluedot_training.yaml --run-id bluedot-training
+uv run csf state-audit verify-run --run-id bluedot-training
+```
+
+**9. Final-test clean stage.** 32 clean forwards and nothing else. No candidate set is built and
+no intervention hook is registered, so no final-test outcome exists.
+
+```powershell
+uv run csf state-audit final-test-clean --config configs/state_audit/bluedot_final_test_clean.yaml --run-id bluedot-final-test
+```
+
+**10. Fit and commit.** Loads no model. Fits the transforms and the three ridges on the 96
+training prompts only, builds the wrong-state pairing and the ten derangements, and commits every
+final-test forecast before any intervention is applied.
+
+```powershell
+uv run csf state-audit commit-forecasts `
+  --training-config configs/state_audit/bluedot_training.yaml --training-run-id bluedot-training `
+  --final-test-config configs/state_audit/bluedot_final_test_clean.yaml --final-test-run-id bluedot-final-test `
+  --projection-id bluedot_state_dependence_projection_v1
+uv run csf state-audit verify-commitments --run-id bluedot-final-test
+```
+
+**11. Final-test resolution and analysis.** Not implemented, and deliberately the last thing
+built. This is where a result would come from, and none exists.
 
 ### Verification loads no model
 

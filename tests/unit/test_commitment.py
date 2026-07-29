@@ -142,6 +142,8 @@ def test_reveal_verifies_an_untouched_forecast(isolated_runs: Path) -> None:
 
     reveal = reveal_selection(RUN_ID, _candidate_set(), commitment, forecast, SEED_HEX)
     assert reveal.verified
+    assert reveal.no_selection is False
+    assert reveal.selected_intervention_id is not None
     assert reveal.selected_intervention_id.startswith("trial_00001.opaque_")
 
 
@@ -151,6 +153,7 @@ def test_reveal_does_not_expose_the_raw_seed(isolated_runs: Path) -> None:
     write_selection_seed(RUN_ID, SEED_HEX)
     reveal = reveal_selection(RUN_ID, _candidate_set(), commitment, forecast, SEED_HEX)
     assert SEED_HEX not in reveal.model_dump_json()
+    assert reveal.selection_seed_hash is not None
     assert reveal.selection_seed_hash.startswith("sha256:")
 
 
@@ -188,7 +191,14 @@ def test_verify_run_flags_a_commitment_with_no_reveal(isolated_runs: Path) -> No
     commit_forecast(RUN_ID, _forecast())
     report = verify_run_commitments(RUN_ID)
     assert not report["verified"]
-    assert report["unrevealed"] == [{"trial_id": "trial_00001", "method_id": "state_mlp"}]
+    assert report["unrevealed"] == [
+        {
+            "trial_id": "trial_00001",
+            "method_id": "state_mlp",
+            "state_condition": "true",
+            "condition_index": "0",
+        }
+    ]
 
 
 def test_verify_run_is_not_vacuously_true_for_an_empty_run(isolated_runs: Path) -> None:

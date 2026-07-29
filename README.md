@@ -1,75 +1,188 @@
 # causal-self-forecasting
 
-A reproducible benchmark for testing whether language models can forecast how blinded internal
-interventions will change their outputs, with calibrated scoring, hidden-state controls, and
-held-out mechanism evaluation.
+**Does a language model's hidden state carry information about what an intervention will do to
+its answer, beyond what you can already read off the prompt and the output?**
 
-Working name: **Causal Self-Forecasting Lab**. Benchmark: **CSF-Bench**.
+That is the whole question. It is narrower than "does the model understand itself", and it is
+narrow on purpose, because it is answerable.
 
-## Status
+Working name: Causal Self-Forecasting Lab. Benchmark: CSF-Bench.
 
-**No CSF-Bench scientific result exists.** There is no model organism, no estimated and
-validated direction, no trained state-conditioned forecaster, and no verified public export.
+---
 
-The pipeline runs end to end: on the fixture model in the test suite, and on real Gemma 3 1B
-for systems and harness validation. What has been measured on real weights is a systems
-benchmark (load time, forward cost, capture correctness) and an intervention harness validation
-(no-op equality, sign reversal, four observed candidates on one item). Both are explicitly
-non-scientific: the directions used are synthetic and unvalidated, and single-item accuracy is
-a scoring smoke check, not a capability measurement.
+## The question in plain English
 
-Nothing in this repository should be read as a finding about how language models reason. See
-`docs/experiment_log.md` for exactly what has been measured and `docs/compute_decision.md` for
-what the measured forward cost implies.
+Take a small language model answering a four-choice question. Reach inside it, add a fixed
+vector to one layer of its residual stream, and measure how much that shifts the answer it
+preferred. Now try to **predict** that shift in advance.
 
-### Active work: the BlueDot state-dependence arm
+Two predictors get the same job. Both see the prompt, the model's clean output distribution, and
+a complete numerical description of the intervention. Only one of them also sees the model's
+actual hidden state for that prompt.
 
-As of 2026-07-27 the active experiment is a narrower arm, preregistered before any run:
+* If the state-conditioned predictor does better, the residual stream carried something about the
+  intervention's effect that the visible inputs did not.
+* If it does not, the state added nothing detectable at this scale, and that is the finding.
 
-> Does access to Gemma 3 1B's correct prompt-specific hidden state improve forecasts of how a
-> fixed internal intervention changes the model's clean preferred answer, beyond the prompt, the
-> clean output distribution, and a complete numerical representation of the intervention?
+Then the control that makes the first case mean anything: swap in **another prompt's** hidden
+state. If performance holds up, the predictor was using *some* state, not *this prompt's* state,
+and the claim collapses. Both results have to go the right way.
 
-It is an external state-information audit. It does not test introspection, consciousness,
-self-awareness, faithful verbal reasoning, hidden goals, or deployment readiness.
+The formal statement, the hypotheses, and the decision rule are frozen in
+[`docs/bluedot/preregistration_state_dependence.md`](docs/bluedot/preregistration_state_dependence.md).
 
-* `docs/bluedot/preregistration_state_dependence.md` freezes the design. It supersedes
-  `docs/preregistration.md` for this arm only; the original is unedited and still governs the
-  broader study.
-* `docs/bluedot/execution_decision_tree.md` freezes the order of operations and the gate at every
-  branch point.
-* `docs/bluedot/current_state_audit.md` is the read-first audit the arm was scoped against.
+## What this is not
 
-The arm uses one clean pinned model and no model organism, ridge regressions and no MLP, and 168
-prompts. Estimated cost is about 40 minutes of CPU forward time. **No GPU and no compute grant is
-needed.** The model organism, LoRA training, learned behavioral directions, the state MLP, the
-verbal reporter, SAE work, the 4B replication, mechanism transfer, and the dashboard are all
-deferred out of this arm's path; they remain part of the broader roadmap in
-`docs/research_plan.md`.
+This is an **external state-information audit**. The predictors are ridge regressions that we fit
+and control. A ridge regression reading a residual stream is a readout, not a report, and the
+model is not the thing doing the reporting.
 
-No calibration, training, or final-test run has been executed and no result exists.
+Nothing here tests, and no result from it may be described as testing, introspection,
+consciousness, self-awareness, faithful verbal reasoning, hidden goals, deception, or deployment
+readiness.
 
-The arm's first slice is done: the prompt split is frozen at
-`data/prompt_manifests/bluedot_state_dependence_v1.json`, 168 prompts on the `neutral_a` wrapper
-drawn deterministically from 256 eligible ARC groups at seed 20260727, disjoint by group and by
-item across all four roles. Building it loads no model and runs no forward pass:
+Read [`docs/claim_boundaries.md`](docs/claim_boundaries.md) before describing any number from this
+repository.
+
+## Current status
+
+**No forecasting result exists.** No forecaster has been fitted, no forecast has been committed,
+and no method has been compared to another. Nothing in this repository is evidence about how
+language models reason.
+
+What has actually been measured, on real pinned `google/gemma-3-1b-it` weights at revision
+`dcc83ea841ab6100d6b47a070329e1ba4cf78752`:
+
+| Stage | State | What it produced |
+| --- | --- | --- |
+| Systems benchmark | done | Load time, forward cost, and hook-owned capture verified at layer 13 by patching a known vector and reading it back. Classified `systems_benchmark`. |
+| Intervention harness controls | done | All five required controls pass, including no-op equality and sign reversal. |
+| Frozen prompt split | done | 168 prompts, disjoint by item and group across four roles, drawn deterministically from 256 eligible ARC groups. No model involved. |
+| Direction family | done | Eight unit directions built from the pinned unembedding. Construction, not causal validation. |
+| Calibration plan | done | Target, ratio grid, two permitted layers, and six pass conditions frozen before any number existed. |
+| Engineering smoke | done | 8 prompts, 144 forwards, 136 observations, no failures, verified, deterministic across processes. Plumbing validation. |
+| Calibration sweep | done | 32 prompts, 2,624 forwards, 2,592 observations, no failures, verified. Passed at layer 13 and selected the smallest passing ratio. A choice of stimulus, not a measurement. |
+| Training set, forecasters, final test | not started | This is where a result would come from. |
+
+Every measured number lives in [`docs/experiment_log.md`](docs/experiment_log.md), read from
+verified run artifacts. None is restated here, because a number copied by hand into a README is a
+number that will eventually be wrong.
+
+Two things that look like results and are not:
+
+* **Clean accuracy over a handful of items** is a scoring smoke check, not a capability
+  measurement. The study's target is defined against the model's own clean preferred answer, not
+  against the dataset key, so clean correctness does not enter the measurement at all.
+* **Effect sizes from the engineering smoke** select nothing. Its ratio and layer were fixed in
+  advance precisely so they could not be chosen with the effect distribution in view, and
+  `csf calibration summarize` refuses observations whose prompt role is not `calibration`.
+
+## Study design
+
+One model, one task, one layer, one intervention family, linear readouts only.
+
+| Item | Value |
+| --- | --- |
+| Model | `google/gemma-3-1b-it`, revision pinned, CPU float32, hidden dim 1152 |
+| Task | ARC-Challenge, four choices, one neutral prompt wrapper |
+| Prompts | 168: 8 smoke, 32 calibration, 96 training, 32 final test, disjoint by item and group |
+| State | Residual stream at the final prompt token, layer 13 primary, layer 20 the only fallback |
+| Target | `delta_clean_top_margin`: the shift in the margin around the model's **own** clean preferred answer, with that answer held fixed after the intervention |
+| Directions | 8 unit vectors: 4 centered answer-token unembedding directions, 4 seeded controls orthogonal to their span and to each other |
+| Candidates | 17 per prompt (8 directions x 2 signs, plus a no-op); 81 at calibration (x 5 ratios) |
+| Strength | One global alpha per layer and ratio, `ratio * median clean state norm over the calibration prompts`. Never prompt-relative. |
+| Methods | Ridge regressions only: intervention-only, visible-information, and state-conditioned bilinear |
+| Primary control | Deterministic nearest matched **wrong state** from the other final-test prompts |
+| Analysis | Prompt-first aggregation, paired bootstrap over prompt groups, decision rule fixed in advance |
+
+Three design choices carry most of the weight:
+
+**The strength is global, not prompt-relative.** `public_view` publishes an intervention's
+strength to every method. If the strength were `ratio * ||h_prompt||`, the visible-information
+baseline would silently receive the prompt's state norm, and the exact comparison this study
+exists to make would be contaminated at the source. There is no prompt-specific strength function
+anywhere in the code, and `check_global_alpha` refuses a set of observations that used more than
+one alpha at a grid point.
+
+**Candidate identity is opaque.** A real steer and a matched random control are published
+identically: same operation, same layer, same strength, different meaningless id. Naming the
+mechanism would let a method dismiss controls without ever consulting the model's state. The
+record type refuses an identifier that names a construction role, an answer label, or a family.
+
+**Thresholds are frozen before the numbers exist.** The calibration plan fixes the target, the
+five ratios, the two permitted layers, and the six pass conditions, and the run is judged against
+the plan rather than against anything it measured. The selector takes the **smallest** passing
+ratio in preregistered order, never the largest effect, because choosing the stimulus by the
+outcome would make the comparison circular. Layer 20 is refused unless a layer-13 run recorded
+`fallback_required`.
+
+## Installation
+
+Python 3.12 and [uv](https://docs.astral.sh/uv/). No GPU. The whole study is about 40 minutes of
+CPU forward time; see [`docs/compute_decision.md`](docs/compute_decision.md).
+
+```powershell
+uv sync --extra dev --extra torch
+```
+
+The test suite is fully offline: it builds its own tiny fixture model and never downloads
+weights.
+
+Real Gemma weights are gated. Two separate things are needed, and `csf benchmark` reports them
+separately because the fixes differ:
+
+1. **Authenticate.** `uv run hf auth login`, or `uvx hf auth login` to avoid installing into the
+   project environment. The token is read from the Hugging Face credential store; this project
+   never prints, logs, or writes it to an artifact.
+2. **Accept the Gemma conditions** on https://huggingface.co/google/gemma-3-1b-it. Authentication
+   alone is not enough.
+
+The model is Gemma, not Gemini. The weights are about 2.0 GB.
+
+## Quick verification
+
+Everything here runs offline in a few minutes and loads no pretrained weights.
+
+```powershell
+uv run csf doctor          # environment plus every config validated
+uv run pytest              # the full suite, including the anti-fabrication guard
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+```
+
+To check the frozen artifacts without running anything:
+
+```powershell
+uv run csf prompts verify --manifest-id bluedot_state_dependence_v1
+uv run csf directions verify-family --manifest-id bluedot_state_dependence_directions_v1
+uv run csf calibration verify-plan --plan-id bluedot_state_dependence_calibration_v1
+```
+
+Each of those recomputes the artifact's own content hash before checking anything else, so an
+edited manifest fails to load rather than verifying.
+
+## Running the study
+
+Stages run in this order. Each refuses to start if the artifact it depends on does not verify.
+
+**1. Prepare the task.** Needs network access; everything after this is offline.
+
+```powershell
+uv run csf data prepare --config configs/tasks/arc_mcq.yaml
+```
+
+**2. Freeze the prompt split.** No model, no forward pass. Selection is a pure function of the
+master seed and the group ids: it never reads correctness, confidence, logits, hidden states, or
+any outcome, so the split cannot be chosen to suit a result.
 
 ```powershell
 uv run csf prompts manifest --config configs/prompts/bluedot_state_dependence.yaml
 uv run csf prompts verify --manifest-id bluedot_state_dependence_v1
 ```
 
-Selection is a pure function of the master seed and the group ids. It never reads model
-correctness, confidence, logits, hidden states, or any outcome, so the split cannot be chosen to
-suit a result. Rerunning leaves an identical manifest byte-identical rather than rewriting it,
-and a manifest that differs is refused unless `--force` is passed. Committing the manifest is
-what freezes the split; see `docs/experiment_log.md` for the hashes.
-
-The direction family is frozen too: eight unit directions at
-`data/direction_manifests/bluedot_state_dependence_directions_v1.json`, four centered
-answer-token unembedding directions and four seeded controls orthogonal to their span and to
-each other. Building them reads the pinned model's output embedding and nothing else, and runs
-no prompt.
+**3. Build the direction family.** Reads the pinned model's output embedding and nothing else.
+No prompt is run and no state is captured.
 
 ```powershell
 uv run csf directions build-family --config configs/directions/bluedot_state_dependence.yaml
@@ -77,331 +190,166 @@ uv run csf directions verify-family --manifest-id bluedot_state_dependence_direc
 uv run csf directions verify-family --manifest-id bluedot_state_dependence_directions_v1 --regenerate
 ```
 
-`verify-family` without `--regenerate` loads no model: it checks the manifest's own hash, every
-stored vector's content hash, dimensions, norms, orthogonality, and family completeness. With
-`--regenerate` it rebuilds all eight from the pinned weights and compares, writing nothing.
+Without `--regenerate` this loads no model: it checks the manifest hash, every stored vector's
+content hash, dimensions, norms, orthogonality, and completeness. With `--regenerate` it rebuilds
+all eight from the pinned weights and compares, writing nothing.
 
-The calibration plan is frozen too, at
-`data/calibration_plans/bluedot_state_dependence_calibration_v1.json`. It fixes the target, the
-five norm ratios, the two permitted layers, and the six pass conditions **before** any
-calibration number exists, which is the only thing that makes a threshold a threshold.
+**4. Freeze the calibration plan.** No model. This is what makes a threshold a threshold.
 
 ```powershell
 uv run csf calibration plan --config configs/calibration/bluedot_state_dependence.yaml
 uv run csf calibration verify-plan --plan-id bluedot_state_dependence_calibration_v1
-uv run csf calibration summarize --plan-id ... --observations obs.jsonl --layer 13
-uv run csf calibration select --plan-id ... --summaries summaries.json
 ```
 
-None of these loads a model. Strength is one global alpha per layer and ratio, never a
-per-prompt one: `public_view` publishes `strength` to every method, so a prompt-relative
-strength would hand the visible-information baseline the prompt's state norm. The selector takes
-the **smallest** passing ratio in preregistered order, never the largest effect, because
-choosing the stimulus by the outcome would make the comparison circular.
-
-The eight-prompt engineering smoke has been executed on the pinned weights. It is the first
-BlueDot step that produced measured numbers, and it is plumbing validation rather than science:
-144 forwards, `scientific_result: false`, and a ratio and layer that were both fixed in advance
-so that neither could be chosen with the effect distribution in view.
+**5. Engineering smoke.** 8 prompts, 144 forwards, at a ratio fixed in advance because it is
+arbitrary. Proves the pipeline end to end where a mistake is cheap.
 
 ```powershell
 uv run csf state-audit smoke --config configs/state_audit/bluedot_smoke.yaml --run-id bluedot-smoke-layer13
 uv run csf state-audit verify-run --run-id bluedot-smoke-layer13
-uv run csf state-audit verify-run --run-id bluedot-smoke-layer13 --compare-run-id <SECOND_RUN_ID>
 ```
 
-The preregistered calibration sweep runs through the same command group. It captures the clean
-state for all 32 calibration prompts, takes the median as the reference norm **before** any
-intervention runs, derives one global alpha per frozen ratio, applies 8 directions x 2 signs x 5
-ratios plus one shared no-op to every prompt, and then evaluates the six frozen conditions and
-takes the smallest passing ratio:
+**6. Calibration.** 32 prompts, 2,624 forwards. Captures every clean state first, takes the
+median as the reference norm **before** any intervention runs, derives one alpha per frozen
+ratio, sweeps the grid, then applies the six preregistered conditions.
 
 ```powershell
 uv run csf state-audit calibrate --config configs/state_audit/bluedot_calibration_layer13.yaml --run-id bluedot-calibration-layer13
 uv run csf state-audit verify-run --run-id bluedot-calibration-layer13
 ```
 
-Thresholds, ratios, prompts, target, and layers all come from the frozen plan and are not
-adjustable at run time; the command refuses a widened or reordered grid, a third layer, a
-non-calibration prompt role, and a no-op tolerance that differs from the plan's. The layer-20
-fallback lives in its own config and is refused unless `--primary-run-id` names a layer-13 run
-whose decision record says `fallback_required`, so the fallback cannot become a second attempt.
+The layer-20 fallback has its own config and is refused unless `--primary-run-id` names a layer-13
+run whose decision record says `fallback_required`, so it cannot become a second attempt.
 
-`smoke` and `calibrate` load the model; `verify-run` does not. Verification recomputes the run manifest's own
-content hash, every artifact hash, every observation's target from its own logits, the reference
-norm from the recorded clean state norms, and the single global alpha across every non-no-op
-observation. `--compare-run-id` compares two runs of the same inputs row by row, which is how
-cross-process determinism is measured. A completed run at the same id is refused rather than
-rewritten, because its artifacts are the only record of what happened. Measured values are in
-`docs/experiment_log.md`.
+**7. Training, forecasters, and final test.** Not implemented. This is where a result would come
+from, and none exists.
 
-**No calibration has been run and no ratio has been selected.** The smoke's effect sizes select
-nothing: `csf calibration summarize` refuses observations whose prompt role is not
-`calibration`, so a strength cannot be chosen from prompts that were not set aside to choose it.
+### Verification loads no model
 
-**Constructing a direction is not validating one.** These are stimuli with a recorded recipe.
-Their artifacts carry `validated: false`, and nothing about them licenses calling any direction
-meaningful, load-bearing, or bias-related. The stored ids are opaque hash prefixes and the
-mapping to construction roles lives only in the private manifest, so a forecaster cannot read
-family membership off an id.
+`csf state-audit verify-run` recomputes, from files on disk: the run manifest's own content hash,
+every artifact hash, every observation's target from its own logits, the reference norm from the
+recorded clean state norms, and the single global alpha per grid point. For a calibration run it
+also re-derives the decision from the summaries beside it and refuses a selected ratio that is not
+the smallest passing one.
 
-## The idea
+`--compare-run-id` compares two runs of the same inputs row by row, which is how cross-process
+determinism is measured. A completed run at the same run id is refused rather than overwritten,
+because its artifacts are the only record of what happened.
 
-A model can explain its answer persuasively without the explanation tracking the computation
-that produced it. Explanations are hard to grade because there is no ground truth.
+### Offline fixture pipeline
 
-So do not ask for an explanation. Ask for a prediction about an intervention that has not been
-chosen yet, record it, commit to it with a hash, and only then select and apply one:
-
-> forecast, commit, select, intervene, measure, score
-
-Now there is ground truth. The forecast existed before the outcome did.
-
-The question this can actually answer is narrower than "does the model understand itself":
-
-> Can a forecasting system make calibrated predictions about causal internal changes, and does
-> its performance depend on the model's actual state?
-
-## What makes it a test rather than a demo
-
-The controls carry the argument:
-
-* **Same prompt, wrong state.** A clean model and an adapted model produce character-identical
-  prompts. The forecaster gets the right state or a wrong one. A prompt-only baseline cannot
-  tell them apart even in principle, so a true-state advantage cannot be explained by the text.
-* **Norm-matched random directions.** Separates "a large perturbation happened" from "this
-  direction matters".
-* **Opaque candidate labels.** A matched random control and a real steer are described
-  identically in public. Naming the mechanism would let a method dismiss controls without ever
-  consulting the model's state.
-* **Held-out mechanism.** Trained on additive interventions, tested on activation patching.
-* **Precommitment.** Forecasts are hashed before a selection seed exists, and `csf verify run`
-  lets a third party recompute every one of them.
-
-A negative result is a real outcome here. If the prompt-only baseline matches the
-state-conditioned forecaster, that is the finding, and the preregistration fixes the decision
-rule in advance so it cannot be renegotiated afterward.
-
-## Quickstart
-
-Requires Python 3.12 and [uv](https://docs.astral.sh/uv/). No GPU is needed for the smoke
-pipeline.
+The original CSF-Bench trial and commitment loop still runs end to end on the fixture model:
 
 ```powershell
-uv sync --extra dev --extra torch
-uv run csf doctor
-uv run pytest -q
-
-# Real ARC data
-uv run csf data prepare --config configs/tasks/arc_mcq.yaml --max-items 20
-
-# Freeze the BlueDot prompt split (offline, no model, no forward pass)
-uv run csf prompts manifest --config configs/prompts/bluedot_state_dependence.yaml
-uv run csf prompts verify --manifest-id bluedot_state_dependence_v1
-
-# Build the BlueDot direction family (loads the pinned model's unembedding; runs no prompt)
-uv run csf directions build-family --config configs/directions/bluedot_state_dependence.yaml
-uv run csf directions verify-family --manifest-id bluedot_state_dependence_directions_v1
-
-# Freeze the calibration plan (offline, no model)
-uv run csf calibration plan --config configs/calibration/bluedot_state_dependence.yaml
-uv run csf calibration verify-plan --plan-id bluedot_state_dependence_calibration_v1
-
-# BlueDot engineering smoke on the pinned weights (144 forwards), then verify from artifacts
-uv run csf state-audit smoke --config configs/state_audit/bluedot_smoke.yaml --run-id bluedot-smoke-layer13
-uv run csf state-audit verify-run --run-id bluedot-smoke-layer13
-
-# Smoke pipeline on the fixture model, offline
 uv run csf directions synthetic --config configs/experiments/smoke.yaml
 uv run csf interventions validate --config configs/experiments/smoke.yaml
 uv run csf trials generate --config configs/experiments/smoke.yaml --max-trials 8
-
-# Apply interventions and record observations (ground-truth mode, all candidates)
 uv run csf trials resolve --run-id <RUN_ID> --ground-truth
 ```
 
-`csf score run` is deliberately not in that list. It scores *committed forecasts* against
-observations and raises if a run has none, and a ground-truth resolution commits nothing. There
-is currently **no CLI command that commits a forecast**: `commit_forecasts` is reachable from
-Python only. The full generate, resolve, fit, commit, resolve, score loop is exercised end to
-end by `tests/integration/test_resolve.py::test_full_pipeline_generate_resolve_fit_commit_score`,
-which is the working example to copy until a `csf forecast` command exists.
+There is no CLI command that commits a forecast; `commit_forecasts` is reachable from Python
+only. The full generate, resolve, fit, commit, resolve, score loop is exercised by
+`tests/integration/test_resolve.py::test_full_pipeline_generate_resolve_fit_commit_score`, which
+is the working example to copy.
 
-`csf doctor` reports the environment and validates every config. It does not fail because a
-GPU is missing; it says so.
-
-### Resolution and scoring
-
-`csf trials resolve` has two modes. Forecast mode (the default) requires committed forecasts,
-selects one candidate per trial after commitment, applies it, and reveals and verifies the
-commitment. Ground-truth mode (`--ground-truth`) applies every candidate and records
-observations only, which is what trains the baselines and validates the harness on real
-weights. Neither mode produces a scientific result, and both refuse to resolve a systems
-benchmark or to treat a fixture run as scientific.
-
-`csf score run` matches committed forecasts to observations. No-op candidates are excluded from
-the headline metrics and reported separately, every metric carries its sample count and a
-group-bootstrapped interval, and scores are written to the run directory only, never to the
-public results tree. It refuses to score a scientific run whose commitments did not verify.
-
-The two baselines that need no model organism live in `csf`'s forecasting module: a constant
-predictor (training-split averages by public operation, layer, and strength) and a prompt-only
-lexical model (TF-IDF of the prompt plus public strength and layer). Both are fenced to public
-information: neither can see a hidden state, an adapter identity, a private direction, a correct
-answer, or an outcome from the split it will be scored on. That fence is what makes the
-same-prompt state-swap comparison meaningful, and it is checked by a leakage audit test.
-
-### The fixture model
-
-`configs/experiments/smoke.yaml` uses a tiny, randomly initialized Llama built locally by the
-code. It exists so the whole pipeline runs offline in seconds with no gated weights.
-
-It knows nothing and its answers are noise. It tests the plumbing, not the science, and the
-exporter will never publish a number produced from it.
-
-### Real models
-
-`configs/models/gemma3_1b_it.yaml` pins Gemma 3 1B to a commit sha. Those weights are gated on
-Hugging Face, so two separate things are needed before they will load.
-
-**1. Authenticate.** A token with read access is enough. Either form works:
-
-```powershell
-uv run hf auth login
-# or, without installing into the project environment:
-uvx hf auth login
-```
-
-The token is read from the Hugging Face credential store. This project never prints, logs, or
-writes it to an artifact, and it does not require `HF_TOKEN` to be set when the credential
-store already has a valid login.
-
-**2. Accept the Gemma conditions.** Authentication alone is not enough. The account must also
-accept the usage conditions on the model page at
-https://huggingface.co/google/gemma-3-1b-it. These are separate failures and `csf benchmark`
-reports them separately, because the fixes are different.
-
-The model is Gemma, not Gemini. The weights are about 2.0 GB.
-
-## Systems benchmark
-
-Before deciding whether to rent a GPU, `csf benchmark` answers three operational questions:
-do the pinned weights load here, what does a forward pass cost on this machine, and does the
-hook-owned capture path work on real weights.
-
-Start with one item:
-
-```powershell
-uv run csf benchmark `
-  --model-config configs/models/gemma3_1b_it.yaml `
-  --task-config configs/tasks/arc_mcq.yaml `
-  --split test `
-  --max-items 1 `
-  --warmup-runs 1 `
-  --timed-runs 3
-```
-
-Then, only if the one-item timing looks reasonable, twenty:
-
-```powershell
-uv run csf benchmark `
-  --model-config configs/models/gemma3_1b_it.yaml `
-  --task-config configs/tasks/arc_mcq.yaml `
-  --split test `
-  --max-items 20 `
-  --warmup-runs 2 `
-  --timed-runs 5
-```
-
-Both need `csf data prepare` to have run first. `--offline` requires locally cached weights
-and fails clearly if they are missing rather than reaching for the network.
-
-### A systems benchmark is not a scientific result
-
-This is the distinction the whole repository is built around, so the benchmark enforces it
-rather than relying on anyone remembering it.
-
-A **systems benchmark** measures whether the machine can run the model, and how fast. A
-**CSF-Bench result** would measure whether a forecasting method predicts intervention
-effects. The second requires a model organism, a validated direction, and a forecaster, none
-of which exist yet.
-
-Every benchmark artifact carries its classification:
-
-```json
-{ "classification": "systems_benchmark", "scientific_result": false, "fixture_only": false }
-```
-
-Fixture runs are labeled `fixture_systems_test` with `fixture_only: true`. `scientific_result`
-is typed as a literal false, so a record claiming otherwise cannot be constructed at all. A
-benchmark run has no forecasts or commitments in it, so `csf verify run` will not verify it
-and the public exporter cannot accept it.
-
-The accuracy a benchmark reports is a scoring smoke check over a handful of items. It is not a
-capability measurement and must not be quoted as one.
-
-### The compute decision
-
-A successful benchmark includes a planning estimate built from the measured median forward
-time:
+## Repository structure
 
 ```text
-estimated_forward_count = number_of_prompts x model_states_per_prompt
-                          x candidates_per_trial x forward_passes_per_candidate
-estimated_cpu_seconds   = estimated_forward_count x measured_median_forward_seconds
+configs/
+  models/         pinned model configs, revisions as commit shas
+  tasks/          dataset and prompt-wrapper definitions
+  prompts/        frozen prompt-split config
+  directions/     direction-family construction config
+  calibration/    frozen calibration plan config
+  state_audit/    smoke and calibration run configs
+  experiments/    the offline fixture pipeline
+  interventions/  intervention grids
+data/
+  manifests/           task manifest, content-hashed (tracked)
+  prompt_manifests/    the frozen 168-prompt split (tracked)
+  direction_manifests/ the direction family (tracked)
+  calibration_plans/   the frozen calibration plan (tracked)
+  processed/           prepared ARC data (git-ignored, regenerated)
+src/causal_self_forecasting/
+  schemas.py           every record that reaches disk, self-verifying
+  state_audit_target.py  the study target, as pure functions
+  models/         loading, answer scoring, hook-owned capture
+  interventions/  tensor operations, direction store, direction family
+  tasks/          dataset loading, prompt rendering, the frozen split
+  trials/         trial generation, candidates, commitment, resolution
+  calibration/    strength rule, pass conditions, layer state machine
+  state_audit/    candidate builders, run execution, artifact verification
+  forecasting/    the two model-free baselines
+  scoring/        metrics and scoring
+tests/            unit, integration, and the anti-fabrication guard
+docs/             preregistrations, methodology, claim boundaries, logs
+results/runs/     run artifacts (git-ignored)
+results/public/   verified exports (tracked; none exist yet)
+artifacts/        direction vectors and fixtures (git-ignored, regenerable)
 ```
 
-The assumptions travel with the number in the artifact, and their source is
-`docs/preregistration.md` section 9. The estimate reports whether a small clean-model
-validation still looks practical on CPU, whether a full intervention sweep does, and whether
-LoRA training does. It is arithmetic, not a prediction, and it does not rent anything. The
-compute decision is the maintainer's.
+## Reproducibility
 
-### Known limitations
+The frozen artifacts are tracked and tiny. Committing them is what freezes a decision; a split
+that exists on one machine is not a split.
 
-CPU timing is machine-specific and says nothing about other hardware. Latency is measured on
-one representative prompt at batch size one, so it ignores batching. Memory is reported from
-the OS where that is reliable, and reported as null with a reason where it is not, rather than
-being estimated.
-
-## Repository layout
+Every artifact recomputes its own content hash when it loads, so an edited file fails to parse
+rather than quietly verifying. Every run manifest cites the hashes of everything upstream of it,
+and the chain is checkable end to end without a GPU:
 
 ```text
-configs/       models, tasks, interventions, experiments
-src/           the csf package
-tests/         unit, integration, and the anti-fabrication guard
-docs/          research plan, preregistration, methodology, claim boundaries, failure modes
-results/runs/  run artifacts (git-ignored)
-results/public/ verified exports (committed)
-artifacts/     directions and adapters (weights git-ignored)
+task manifest -> prompt manifest -> direction family -> calibration plan -> run manifest
 ```
 
-## Integrity rules
+Determinism comes from one master seed, `20260727`, threaded through `derive_seed` with a
+namespaced label per purpose, so changing one seeded step cannot shift another. Commitment salts
+are the one deliberate exception: they come from the OS CSPRNG.
 
-These are enforced by tests, not by good intentions:
+To reproduce from scratch: install, run `csf data prepare`, then stages 2 through 6 above. The
+prompt manifest, direction family, and calibration plan should come out byte-identical to the
+tracked ones; a rerun reports `unchanged` and leaves the file untouched rather than rewriting it.
+
+Integrity rules enforced by tests rather than by good intentions:
 
 * No invented results, sample counts, intervals, or hashes. Planned values are labeled planned.
-* `tests/test_no_fake_results.py` fails if dashboard source contains hard-coded metric values.
-* `PublicDashboardRecord` cannot be constructed for a run whose commitments did not verify.
-* `MetricValue` cannot be constructed without a sample count and an interval.
-* Model revisions cannot be `main`. `ModelSpec` rejects moving pointers.
-* Salts, selection seeds, and private payloads never enter version control.
+* `tests/test_no_fake_results.py` fails if a public export exists that did not verify.
+* `PublicDashboardRecord` cannot be constructed for an unverified run, and `MetricValue` cannot be
+  constructed without a sample count and an interval.
+* `scientific_result` is a typed `Literal[False]` on every engineering record, so a record
+  claiming otherwise cannot be constructed at all.
+* Model revisions cannot be `main`; `ModelSpec` rejects moving pointers.
+* Salts, selection seeds, and private payloads never enter version control, and CI greps the
+  tracked file list to confirm it.
 
-## Claim boundaries
+## Documentation
 
-This project cannot show that a model understands itself, knows why it answered, reveals its
-true reasoning, or reveals hidden goals. A linear probe is not a self-report, and an attached
-forecasting head is not introspection.
-
-Read `docs/claim_boundaries.md` before describing any result from this repository.
+| Document | What it is for |
+| --- | --- |
+| [`docs/bluedot/preregistration_state_dependence.md`](docs/bluedot/preregistration_state_dependence.md) | The frozen design of the active study. Read this first. |
+| [`docs/bluedot/execution_decision_tree.md`](docs/bluedot/execution_decision_tree.md) | The order of operations and the gate at every branch point. |
+| [`docs/claim_boundaries.md`](docs/claim_boundaries.md) | What may and may not be said about any result. |
+| [`docs/methodology.md`](docs/methodology.md) | How the harness actually works, and why. |
+| [`docs/experiment_log.md`](docs/experiment_log.md) | Every measured number, read from a verified artifact. |
+| [`docs/compute_decision.md`](docs/compute_decision.md) | What the one measured forward time implies for cost. |
+| [`docs/failure_modes.md`](docs/failure_modes.md) | Fifteen ways a result could look good and mean nothing. |
+| [`docs/deferred_work.md`](docs/deferred_work.md) | What is designed, deliberately not built, and why. |
+| [`docs/preregistration.md`](docs/preregistration.md) | The broader CSF-Bench study. Unedited, still in force outside this arm. |
 
 ## Safety
 
-The model organism is deliberately benign: a controlled preference for one answer position
-under a deployment-like wrapper, with accuracy preserved under evaluation framing. It is not
-scheming and does not have goals. No harmful capability, filter evasion, autonomy, or tool use
-is involved. See `SECURITY.md`.
+The active study fine-tunes nothing, trains nothing, and uses no model organism. It adds a fixed
+vector to a residual stream and reads four logits. The harm ceiling is a wrong letter on a
+multiple-choice question.
+
+A benign model organism is in the broader design and has not been built. See
+[`SECURITY.md`](SECURITY.md) and [`docs/deferred_work.md`](docs/deferred_work.md).
+
+## Citation
+
+See [`CITATION.cff`](CITATION.cff). Please cite the software, and please do not cite it as
+evidence of a finding, because no forecasting result exists yet.
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. See [`LICENSE`](LICENSE). Gemma weights are not redistributed here and remain under Google's
+license.

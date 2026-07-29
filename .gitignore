@@ -1,291 +1,38 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[codz]
-*$py.class
+# What must never be committed, and what must stay committed.
+#
+# The second half is the point. This repository's evidence is a small set of hashed manifests:
+# the frozen prompt split, the direction-family manifest, the calibration plan, and the task
+# manifest. They are tiny, they are what makes a run reproducible, and they are deliberately
+# tracked. Run outputs, weights, caches, and commitment salts are not.
+#
+# `docs/` and `data/` are never ignored broadly. Only named subdirectories are.
 
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# PyInstaller
-#   Usually these files are written by a python script from a template
-#   before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py.cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-.pybuilder/
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-# Pipfile.lock
-
-# UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-# uv.lock
-
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-# poetry.lock
-# poetry.toml
-
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#   pdm recommends including project-wide configuration in pdm.toml, but excluding .pdm-python.
-#   https://pdm-project.org/en/latest/usage/project/#working-with-version-control
-# pdm.lock
-# pdm.toml
-.pdm-python
-.pdm-build/
-
-# pixi
-#   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
-# pixi.lock
-#   Pixi creates a virtual environment in the .pixi directory, just like venv module creates one
-#   in the .venv directory. It is recommended not to include this directory in version control.
-.pixi
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# Redis
-*.rdb
-*.aof
-*.pid
-
-# RabbitMQ
-mnesia/
-rabbitmq/
-rabbitmq-data/
-
-# ActiveMQ
-activemq-data/
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.envrc
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# PyCharm
-#   JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#   be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#   and can be added to the global gitignore or merged into this file.  For a more nuclear
-#   option (not recommended) you can uncomment the following to ignore the entire idea folder.
-# .idea/
-
-# Abstra
-#   Abstra is an AI-powered process automation framework.
-#   Ignore directories containing user credentials, local state, and settings.
-#   Learn more at https://abstra.io/docs
-.abstra/
-
-# Visual Studio Code
-#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
-#   that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#   and can be added to the global gitignore or merged into this file. However, if you prefer, 
-#   you could uncomment the following to ignore the entire vscode folder
-# .vscode/
-# Temporary file for partial code execution
-tempCodeRunnerFile.py
-
-# Ruff stuff:
-.ruff_cache/
-
-# PyPI configuration file
-.pypirc
-
-# Marimo
-marimo/_static/
-marimo/_lsp/
-__marimo__/
-
-# Streamlit
-.streamlit/secrets.toml
-
-# Environment variables and secrets
+# ---------------------------------------------------------------------------
+# Secrets and the commitment protocol
+#
+# A leaked salt or selection seed would let a forecast be recomputed after the fact, which is
+# the one thing the precommitment protocol exists to prevent. CI greps the tracked file list
+# for these patterns as well, because a .gitignore only helps before the first commit.
+# ---------------------------------------------------------------------------
 .env
 .env.*
 !.env.example
 .secrets/
 secrets/
+credentials.json
+service-account*.json
 *.pem
 *.key
 *.crt
-credentials.json
-service-account*.json
+selection_seed.txt
+*_selection_seed.txt
+*_salt.txt
+commitment_salts/
+private_payloads/
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# Virtual environments
-.venv/
-venv/
-env/
-ENV/
-
-# Python tooling
-.pytest_cache/
-.mypy_cache/
-.pyright/
-.ruff_cache/
-.hypothesis/
-.coverage
-.coverage.*
-htmlcov/
-coverage.xml
-.cache/
-
-# Jupyter
-.ipynb_checkpoints/
-*.nbconvert.ipynb
-
-# Model and dataset caches
-.cache/
-huggingface/
-transformers_cache/
-datasets_cache/
-torch_cache/
-wandb/
-mlruns/
-lightning_logs/
-
-# Model weights and checkpoints
+# ---------------------------------------------------------------------------
+# Model weights and caches
+# ---------------------------------------------------------------------------
 *.safetensors
 *.bin
 *.pt
@@ -294,30 +41,36 @@ lightning_logs/
 *.onnx
 *.gguf
 checkpoints/
-# Anchored to the repository root so that src/causal_self_forecasting/models/
-# (package code) stays tracked.
+# Anchored to the repository root so that src/causal_self_forecasting/models/ stays tracked.
 /models/
+huggingface/
+transformers_cache/
+datasets_cache/
+torch_cache/
 artifacts/adapters/*
 artifacts/checkpoints/*
 artifacts/model_cache/*
-
-# Locally built fixture model. Regenerated on demand from a fixed seed, so committing it
-# would add build output to the repository. Its weights are already excluded above, and
-# committing the config without the weights would leave half a model tracked.
-artifacts/fixtures/
-
-# Estimated and generated directions. Reproducible from the run seed and the training data,
-# and every use of one records its hash in the run manifest. A validated direction that is
-# worth publishing alongside a result can be added deliberately with `git add -f`.
-artifacts/directions/*
-!artifacts/directions/.gitkeep
-
-# Keep directory structure
 !artifacts/adapters/.gitkeep
 !artifacts/checkpoints/.gitkeep
 !artifacts/model_cache/.gitkeep
 
-# Raw and processed datasets
+# The locally built fixture model. Regenerated on demand from a fixed seed, so committing it
+# would add build output to the repository.
+artifacts/fixtures/
+
+# Generated direction vectors. Reproducible from the pinned revision, the config, the seed, and
+# the algorithm versions recorded in the tracked direction-family manifest, and every use of one
+# cites its content hash. A validated direction worth publishing alongside a result can be added
+# deliberately with `git add -f`.
+artifacts/directions/*
+!artifacts/directions/.gitkeep
+
+# ---------------------------------------------------------------------------
+# Datasets
+#
+# Prepared ARC data is regenerated by `csf data prepare`. The task manifest that pins its
+# content hashes lives in data/manifests/ and is tracked.
+# ---------------------------------------------------------------------------
 data/raw/*
 data/processed/*
 data/cache/*
@@ -328,7 +81,15 @@ data/downloads/*
 !data/downloads/.gitkeep
 !data/README.md
 
-# Experiment outputs
+# Tracked on purpose: data/manifests/, data/prompt_manifests/, data/direction_manifests/, and
+# data/calibration_plans/. Committing those manifests is what freezes a split, a family, and a
+# plan; a frozen decision that exists on one machine is not frozen.
+
+# ---------------------------------------------------------------------------
+# Run outputs
+#
+# results/public/ is deliberately not ignored: a verified export may be committed.
+# ---------------------------------------------------------------------------
 results/runs/*
 results/private/*
 results/tmp/*
@@ -339,10 +100,64 @@ results/cache/*
 !results/cache/.gitkeep
 !results/README.md
 
-# Public, verified exports may be committed
-# Do not ignore results/public/
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[codz]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+sdist/
+wheels/
+share/python-wheels/
+*.egg-info/
+*.egg
+.installed.cfg
+MANIFEST
 
-# Private research notes and internal planning
+# Environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Tooling caches and coverage
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.hypothesis/
+.cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.cover
+.pdm-python
+.pdm-build/
+.pixi/
+__pypackages__/
+
+# Jupyter
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# ---------------------------------------------------------------------------
+# Private notes and local scratch
+#
+# Named subdirectories only. docs/ itself is tracked.
+# ---------------------------------------------------------------------------
 docs/private/
 docs/internal/
 docs/drafts/
@@ -355,71 +170,31 @@ scratch/
 notes/
 TODO_PRIVATE.md
 RESEARCH_NOTES_PRIVATE.md
-
-# Local selection seeds and commitment salts
-selection_seed.txt
-*_selection_seed.txt
-*_salt.txt
-commitment_salts/
-private_payloads/
-
-# Generated reports and temporary exports
 reports/generated/
-paper/build/
-paper/tmp/
-*.aux
-*.bbl
-*.bcf
-*.blg
-*.fdb_latexmk
-*.fls
-*.log
-*.out
-*.run.xml
-*.synctex.gz
-*.toc
 
-# Node and dashboard
-node_modules/
-dashboard/node_modules/
-dashboard/.next/
-dashboard/out/
-dashboard/dist/
-dashboard/coverage/
-dashboard/.vercel/
-.pnpm-store/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# Local dashboard data
-dashboard/public/data/private/
-dashboard/public/data/tmp/
-
-# Editors and IDEs
+# ---------------------------------------------------------------------------
+# Editors, agents, and operating systems
+# ---------------------------------------------------------------------------
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.example.json
 .idea/
 *.sublime-project
 *.sublime-workspace
-
-# Claude and coding-agent local state
 .claude/
 CLAUDE.local.md
 .cursor/
 .cursorrules.local
 .aider*
 .codex/
-
-# Operating systems
 .DS_Store
 Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 
+# ---------------------------------------------------------------------------
 # Temporary files
+# ---------------------------------------------------------------------------
 tmp/
 temp/
 *.tmp
@@ -428,3 +203,4 @@ temp/
 *.swp
 *.swo
 *~
+*.log

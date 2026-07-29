@@ -230,7 +230,7 @@ baselines, and it defers Phases 5, 6, and 8 through 13.
 | B2a | Direction bank: eight unit directions built from the pinned unembedding | **done, 2026-07-27**; family frozen at `data/direction_manifests/bluedot_state_dependence_directions_v1.json` |
 | B2b | The fixed 16-dimensional intervention projection matrix | not started |
 | B3a | Study target `delta_clean_top_margin`, global strength rule, calibration schemas, thresholds, layer state machine, and the frozen plan | **done, 2026-07-28**; plan frozen at `data/calibration_plans/bluedot_state_dependence_calibration_v1.json` |
-| B3b | Running the real calibration sweep and producing a decision | not started; needs the model |
+| B3b | Running the real calibration sweep and producing a decision | **done, 2026-07-29**; `results/runs/bluedot-calibration-layer13`, `passed_primary`, layer 13 ratio 0.02, verified |
 | B4 | 17-candidate and 81-candidate study candidate sets | **done, 2026-07-28**; `state_audit/candidates.py`, both builders, opaque ids, public view |
 | B5 | Commitment-protocol hardening: extended key, no-selection reveal, pre-existing-outcome refusal | not started |
 | B6 | `StateAuditExample` and block-structured features | not started |
@@ -239,7 +239,7 @@ baselines, and it defers Phases 5, 6, and 8 through 13.
 | B9 | Paired prompt bootstrap and prompt-first aggregation | not started |
 | B10 | `csf verify study` and `csf replay` | partial; `csf state-audit verify-run` verifies one run from artifacts with no model |
 | B11 | Smoke run (8 prompts) | **done, 2026-07-28**; `results/runs/bluedot-smoke-layer13`, 144 forwards, verified, `scientific_result: false` |
-| B12 | Calibration, training, final test | not started; needs the model and a maintainer decision |
+| B12 | Calibration, training, final test | calibration **done, 2026-07-29**; training and final test not started, and both need B6 through B9 first |
 
 Compute for the whole arm is about 40 minutes of forward time on this CPU, about 61 with the
 preregistered layer-20 fallback. No GPU and no compute grant is needed. See
@@ -252,27 +252,21 @@ needs. `csf data prepare` needs network access to `allenai/ai2_arc` and cannot r
 
 ## Phase 5 onward, deferred for the BlueDot arm
 
-Phase 5 is where the missing CUDA device starts to bind. LoRA training on CPU is classified
-insufficient evidence in `docs/compute_decision.md`; a timed micro-run is needed before it is
-treated as practical, and GPU rental should be considered there. The compute decision is the
-maintainer's. None of this blocks the BlueDot arm, which uses no adapter.
+Deferred with reasons and resumption order in **`docs/deferred_work.md`**, which is the single
+current view. It used to be restated here, in the research plan, and in the README; four copies
+of a roadmap drift, so there is now one.
 
-Order for the broader CSF-Bench study, when it resumes:
-
-1. Direction estimation with causal validation (Phase 6). The current directions are synthetic
-   and unvalidated; the broader study needs an estimated, causally validated direction.
-2. Benign model organism (Phase 5), which needs the LoRA training decision above.
-3. The remaining baselines and the state-conditioned forecaster (Phases 7 and 8).
-4. Held-out mechanism transfer (Phase 9).
-5. Dashboard, verbal reporter, SAE, and the 4B replication (Phases 10 through 13).
+The short version: Phase 5 is where the missing CUDA device starts to bind, LoRA training on CPU
+is classified insufficient evidence in `docs/compute_decision.md`, and none of it blocks the
+BlueDot arm, which uses no adapter.
 
 ## Non-negotiables carried through every phase
 
 * No invented experiment results, sample counts, confidence intervals, hashes, or metrics.
   Planned values are labeled planned. Measured values come from saved verified artifacts.
-* The dashboard shows an explicit empty state until a verified export exists.
-* `tests/test_no_fake_results.py` fails if dashboard code contains benchmark-looking numbers
-  that are not present in a verified export.
+* `tests/test_no_fake_results.py` fails if a public export exists that did not verify, and if
+  front-end code ever carries benchmark-looking numbers that are not present in a verified
+  export. The guard runs whether or not a front end exists.
 * Private payloads, salts, and selection seeds never enter version control.
-* The model organism stays benign: a controlled answer-position preference under a
-  deployment-like wrapper, nothing more.
+* If the model organism is ever built, it stays benign: a controlled answer-position preference
+  under a deployment-like wrapper, nothing more. It is deferred; see `docs/deferred_work.md`.

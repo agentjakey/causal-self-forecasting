@@ -24,12 +24,23 @@ inaccuracy. On real, pinned Gemma 3 1B weights
 * the BlueDot engineering smoke ran 8 prompts x 17 candidates plus 8 clean captures, 144 forwards
   in total, at layer 13 under one global intervention strength, with 136 observations, no
   failures, every no-op reproducing the clean logits exactly, and a second execution reproducing
-  every target with a maximum absolute difference of 0.0.
+  every target with a maximum absolute difference of 0.0;
+* the preregistered calibration sweep ran 32 prompts x 81 candidates plus 32 clean captures, 2,624
+  forwards, at layer 13 across the five frozen ratios, with 2,592 observations and no failures,
+  and selected the smallest passing ratio under conditions frozen before the numbers existed.
 
-That last one is plumbing validation of the state-dependence pipeline. Its intervention strength
-was fixed in advance at an arbitrary ratio, it selects no ratio and no layer, its clean accuracy
-over eight items is descriptive rather than a capability measurement, and no forecaster has been
-fitted. It is not calibration and it is not a result.
+The smoke is plumbing validation of the state-dependence pipeline. Its intervention strength was
+fixed in advance at an arbitrary ratio, it selects no ratio and no layer, and it is not
+calibration.
+
+Calibration is a **choice of stimulus, not a measurement**. It says which intervention strength
+the study will use; it says nothing about what the model can do, and it cannot become a result.
+Its effect sizes describe how far a fixed vector moves a logit margin at a given magnitude, which
+is a fact about the intervention, not about the model's reasoning.
+
+Clean accuracy from either run is descriptive over a handful of items and is not a capability
+measurement. No forecaster has been fitted, no forecast has been committed, and no method has been
+compared to another.
 
 None of that is a CSF-Bench result and none of it can become one: the direction used was
 synthetic and unvalidated, and single-item accuracy is a scoring smoke check. The distinction is

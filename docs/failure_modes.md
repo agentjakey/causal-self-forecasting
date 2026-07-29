@@ -4,7 +4,13 @@ Fifteen ways a forecasting result could look good and mean nothing. Each has a d
 method that is part of the design rather than something to be attempted later if a reviewer
 asks.
 
-Status column: `not tested` everywhere, because no experiment has been run.
+Status column: `not tested` everywhere, because no forecasting experiment has been run. Harness
+validation, the engineering smoke, and calibration have run; none of them tests a forecasting
+method, which is what every mode below is about.
+
+Modes 1, 2, 3, 7, 11, and 12 apply directly to the active BlueDot state-dependence arm. The rest
+need a model organism, a verbal reporter, or a held-out mechanism, all deferred; see
+`docs/deferred_work.md`.
 
 | # | Failure mode | What it looks like | How it is detected | Status |
 | --- | --- | --- | --- | --- |
@@ -46,7 +52,7 @@ conditions are both run.
 
 ## Reporting
 
-The dashboard's failure-mode page shows evidence for and against each mode, with sample
-counts. Modes with evidence against the project's own hypotheses stay visible. A failure-mode
-page that only ever reports clean passes is not evidence of a good method; it is evidence of a
-weak test.
+Every mode is reported with the evidence for and against it and with sample counts, in whatever
+the write-up is. Modes with evidence against the project's own hypotheses stay visible. A
+failure-mode report that only ever records clean passes is not evidence of a good method; it is
+evidence of a weak test.

@@ -1,5 +1,12 @@
 # Research plan
 
+> **Scope note, 2026-07-28.** This document describes the broader CSF-Bench study, whose
+> preregistration is `docs/preregistration.md`. It is **not** the active path. The active work is
+> the BlueDot state-dependence arm in `docs/bluedot/preregistration_state_dependence.md`, which
+> uses one clean pinned model, no adapter, and ridge regressions only. Everything in the phase
+> table below from Phase 5 onward is deferred; the current view of that is
+> `docs/deferred_work.md`.
+
 ## The problem
 
 A model can produce a persuasive explanation of its own answer without that explanation
@@ -72,8 +79,9 @@ still informative.
 | 12 | SAE extension (does not block v0.1) |
 | 13 | Gemma 3 4B replication |
 
-Current status is tracked in `build_plan.md`. Phases 0 through 4 are in progress; nothing past
-Phase 4 has started.
+Current status is tracked in `build_plan.md`. Phases 0 through 4 are complete and Phase 7's two
+model-free baselines exist. Nothing else past Phase 4 has started, and Phases 5 through 13 are
+deferred for the reasons in `docs/deferred_work.md`.
 
 ## Compute
 

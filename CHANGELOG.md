@@ -4,6 +4,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed (2026-07-29, publication readiness)
+
+* `README.md` rewritten as a research landing page: the question in plain English, what is and is
+  not being tested, a status table of stages with no restated numbers, the study design, install,
+  quick verification, the stage-by-stage run sequence, repository structure, the reproducibility
+  chain, documentation index, safety, citation, and license. Every command in it was checked
+  against `csf --help`.
+* `docs/deferred_work.md` added: one current view of everything designed and deliberately not
+  built, with the reason for each. The same list used to be restated in the research plan, the
+  build plan, the preregistration, and the README; `docs/build_plan.md` and
+  `docs/research_plan.md` now point at it instead of repeating it.
+* `docs/bluedot/current_state_audit.md` retitled and given a superseded banner. It is a snapshot
+  of 2026-07-27 whose "missing capabilities" and "required changes" sections have all since been
+  built; it is kept for provenance, since the leakage finding became the global-alpha rule and the
+  schema conflicts became the preregistration's conflict table.
+* `.gitignore` deduplicated and reorganized by intent. It was a default Python template
+  concatenated with the project rules, with several sections appearing twice. Same coverage, plus
+  a statement of what is tracked on purpose and why. No tracked file changed status.
+* `SECURITY.md` and `CITATION.cff` corrected: the model organism is described as designed and
+  deferred rather than as something the project trains, and the citation abstract now describes
+  the study that exists.
+* `docs/failure_modes.md` marks which modes apply to the active arm and no longer describes a
+  dashboard page that does not exist.
+
+### Executed (2026-07-29)
+
+* The preregistered calibration sweep at layer 13 on the pinned weights: 32 prompts, 2,624
+  forwards, 2,592 observations, no failures, 41.5 minutes, verified. Status `passed_primary`,
+  selected ratio 0.02 at global alpha 106.87158268272867. Ratios 0.02 and 0.05 satisfied every
+  condition; 0.10, 0.20, and 0.40 failed the 95th-percentile ceiling only. The layer-20 fallback
+  is now permanently closed. Calibration chooses a strength and is not a scientific result;
+  measured values are in `docs/experiment_log.md`.
+
 ### Added (2026-07-28, BlueDot slice B3b: the calibration sweep)
 
 * `state_audit/calibrate.py`: the preregistered sweep at one layer. Clean pass, reference norm

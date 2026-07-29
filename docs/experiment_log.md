@@ -549,12 +549,113 @@ observations, and `csf trials resolve` are untouched. Study artifacts are prefix
 Suite after this slice: **645 passed, 1 skipped** (543 before, 102 added), all offline and all
 passing before any weights were loaded. Ruff, ruff format, pyright, and `csf doctor` clean.
 
+## 2026-07-29: calibration at layer 13, ratio 0.02 selected (a strength decision, not a result)
+
+**Calibration chooses an intervention strength. It measures nothing about the model's abilities
+and is not a scientific result.** No forecaster has been fitted, no forecast has been committed,
+and no method has been compared to another.
+
+Command, under `HF_HUB_OFFLINE=1`:
+
+```powershell
+uv run csf state-audit calibrate --config configs/state_audit/bluedot_calibration_layer13.yaml --run-id bluedot-calibration-layer13
+uv run csf state-audit verify-run --run-id bluedot-calibration-layer13
+```
+
+Every value below is read from the verified run at
+`results/runs/bluedot-calibration-layer13/`. Verification returned `valid: true` with no failures.
+
+| Field | Value |
+| --- | --- |
+| Run id | `bluedot-calibration-layer13` |
+| Run role | `calibration`, `scientific_result: false`, status `complete` |
+| Run manifest hash | `sha256:3e4b4552e6f79609c9df43353e7290f37c337e51706ff5f0cdf8b8a6fe40bd15` |
+| Model | `google/gemma-3-1b-it` at `dcc83ea841ab6100d6b47a070329e1ba4cf78752`, cpu / float32 |
+| Prompt manifest | `sha256:bf351c9d73042fcb3d0cdcb18247ded3411413d73000e047f1ba6ba9ab5b25b9` |
+| Direction family | `sha256:809fbb5b033da740a01574ad5a0ca48f34baca38eef1504a0d66bba8e2fb9138` |
+| Calibration plan | `sha256:a212c6e80f96db55e1aeb0b1879fef441aa6d893a73b7fc43a94142913f97877` |
+| Layer | 13 (primary) |
+| Measured reference norm | 5343.579134136434, the median of the 32 clean state norms, taken before any intervention ran |
+| Clean state norms | min 5064.346015169544, max 5580.3268198316655 |
+| State dimension | 1152 |
+| Prompts / states | 32 / 32 |
+| Signed observations | 2,560 (32 prompts x 16 signed directions x 5 ratios) |
+| No-op observations | 32 (one shared no-op per prompt) |
+| Total observations | 2,592 |
+| Failures | 0 |
+| Forward passes | 2,624 of 2,624 |
+| Wall clock | 2,490.7 s = **41.5 min**, 0.9492 s per forward |
+
+Artifact hashes: observations
+`sha256:261f725a9dfd6f594073078081a149ce3b109c8efcb9de631261c12f7fbc8cb0`; states
+`sha256:d635ef91c79b988937576b7453f71e580df327c5ab1ac56fdc25f46d6de76756`; candidate sets
+`sha256:f0be5696914e7c795fbe72a28324cf122a4ed19bfb0f640fbd5c59bee75d3ef0`; clean pass
+`sha256:4c22b0d244ef41bfac68a516a9fe935cfbe575c1da245393333c3faaafb74606`; reference norm
+`sha256:965af24daf17bea1853aeb47f382bb0eb81d8357cba8b45170f5abe9b14767de`; ratio summaries
+`sha256:6eb2c9aeed9f7d053ac7cb85402ba9a7fb092017825232ef65ef268f2ebbfac8`; decision
+`sha256:9c3740e48e7a65233e13f5c219b6b6ff8b93fca39ae3ce053e661aab7fb0d878`. No failures file was
+written because there were no failures.
+
+### The ratio table
+
+One global alpha per ratio, every one of them `ratio * 5343.579134136434`. Statistics are over
+the 512 non-no-op observations at that grid point.
+
+| Ratio | Global alpha | Fraction >= 0.10 | Median abs | p95 abs | Flips | Passed | Failed condition |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.02 | 106.871583 | 0.769531 | 0.233174 | 0.910243 | 19 | **yes** | - |
+| 0.05 | 267.178957 | 0.910156 | 0.558521 | 2.604479 | 37 | yes | - |
+| 0.10 | 534.357913 | 0.968750 | 1.392059 | 5.216836 | 111 | no | `p95_abs_effect` |
+| 0.20 | 1068.715827 | 0.990234 | 4.757051 | 11.076602 | 315 | no | `p95_abs_effect` |
+| 0.40 | 2137.431654 | 0.994141 | 9.194470 | 23.584962 | 409 | no | `p95_abs_effect` |
+
+Every ratio passed completeness, finite outputs, the no-op tolerance, the large-effect fraction,
+and the median floor. The three largest ratios failed only the 95th-percentile ceiling of 4.0,
+which is the condition that exists to rule out a grid point where the output distribution has
+been destroyed and the target is no longer a small perturbation of the clean preference. It did
+exactly that.
+
+### The decision
+
+**Status `passed_primary`. Selected layer 13, ratio 0.02, global alpha 106.87158268272867.**
+
+Smallest passing ratio in preregistered order, not the largest effect. Ratio 0.05 also passed and
+produces visibly bigger effects; it was not selected, because choosing the stimulus by the size of
+its effect is the circularity the rule exists to prevent.
+
+**The layer-20 fallback is now permanently prohibited.** The only trigger for it was no layer-13
+ratio passing, and two did. The fallback command refuses to run without a layer-13 decision of
+`fallback_required`, so this is enforced rather than remembered.
+
+Integrity, all measured: capture hooks fired 32 of 32, intervention hooks 2,592 of 2,592. Worst
+absolute no-op target **0.0** against the `1.0e-3` tolerance, and worst no-op `delta_norm`
+**0.0**, so no no-op moved the residual stream at all. The intervened state re-read at layer 13
+after the intervention hook matched `h + sign * alpha * d` with a worst absolute error of **0.0**
+across all 2,592 candidates. The verifier recomputed the reference norm and all five alphas from
+the recorded clean state norms and got the same numbers, and re-derived the decision from the
+summaries.
+
+**Clean accuracy, descriptive only: 22 of 32 correct (0.6875).** Thirty-two ARC-Challenge items on
+a 1B model is a scoring smoke check. It has no bearing on the study, whose target is defined
+against the model's own clean preferred answer rather than the dataset key, and no prompt is
+dropped for being answered wrongly.
+
+One thing worth recording: the engineering smoke at ratio 0.10 on the 8 smoke prompts reported a
+p95 of 4.65, and the experiment log entry for it said that number was above the C5 ceiling but was
+not a calibration result and did not move the grid. Calibration on the disjoint 32 prompts
+measured 5.22 at the same ratio and failed C5 there. The prediction and the measurement agree, and
+the ceiling did the job it was written for.
+
+Timing: 0.9492 s per forward against the 0.474158 s median the compute record was built from,
+almost exactly the 2x upper end of the long-prompt band that record predicted. ARC prompts are
+much longer than the 53-token prompt that was timed. The arm's remaining forwards
+(1,728 training and 576 final test) should therefore cost roughly 36 minutes rather than 18.
+
 ## Next entry
 
 The next steps are B2b, the fixed 16-dimensional intervention projection matrix, and B5, the
-commitment-protocol hardening. Neither needs a model. Running the real calibration sweep (B3b) is
-a separate maintainer decision and is the first step in this arm that produces a number the study
-acts on.
+commitment-protocol hardening. Neither needs a model. After those, the training run at the
+selected strength is the next thing that touches the weights.
 
 No CSF-Bench scientific result exists yet, and none should be reported until a real comparison
 has been run and verified.

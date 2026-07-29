@@ -192,11 +192,21 @@ study.
 
 ## G4. Calibration at layer 13
 
-**Not run.** The plan is frozen at
-`data/calibration_plans/bluedot_state_dependence_calibration_v1.json`, plan hash
-`sha256:a212c6e80f96db55e1aeb0b1879fef441aa6d893a73b7fc43a94142913f97877`, and the conditions,
-the strength rule, and the selector are implemented and tested. No calibration has been
-executed, no state norm has been measured, and no ratio has been selected.
+**Status: passed, 2026-07-29.** Executed as `results/runs/bluedot-calibration-layer13`, run
+manifest hash `sha256:3e4b4552e6f79609c9df43353e7290f37c337e51706ff5f0cdf8b8a6fe40bd15`, 2,624
+forwards, 2,592 observations, no failures, verified. **Status `passed_primary`: layer 13, ratio
+0.02, global alpha 106.87158268272867.** Ratios 0.02 and 0.05 satisfied every condition; 0.10,
+0.20, and 0.40 failed C5 only. The full ratio table is in `docs/experiment_log.md`.
+
+**Take the pass branch.** Go to G6. **The layer-20 fallback is now permanently unavailable for
+this study** and is not reconsidered later for any reason; G5 below is retained as the record of a
+branch that was not taken. The fallback command enforces this: it refuses to run without a
+layer-13 decision of `fallback_required`, and this run recorded `passed_primary`.
+
+The plan is frozen at `data/calibration_plans/bluedot_state_dependence_calibration_v1.json`, plan
+hash `sha256:a212c6e80f96db55e1aeb0b1879fef441aa6d893a73b7fc43a94142913f97877`. The conditions,
+the strength rule, and the selector were all implemented and tested before the sweep ran, and the
+sweep was judged against the plan rather than against anything it measured.
 
 The gate below is now machine-checkable rather than a checklist:
 `csf calibration summarize` computes one summary per ratio from supplied observations, and
@@ -229,6 +239,10 @@ that passes but produces a disappointing effect distribution is a pass, and the 
 with it.
 
 ## G5. Calibration at layer 20
+
+**Not taken, and now permanently closed.** G4 passed at layer 13 on 2026-07-29, which is the only
+thing that could have closed it. Retained as the record of the branch that was available and was
+not used.
 
 **Only reachable from a G4 fail.** Repeat G4 identically at layer 20: same 32 prompts, same
 direction bank, same five ratios, same conditions, same `reference_norm` procedure recomputed at

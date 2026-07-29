@@ -8,11 +8,14 @@ authors:
     alias: agentjakey
 repository-code: "https://github.com/agentjakey/causal-self-forecasting"
 abstract: >-
-  A reproducible benchmark testing whether language models can make precommitted, calibrated
-  predictions about how their outputs change under blinded causal interventions on their
-  internal states. Forecasts are committed with a salted hash before an intervention is
-  selected, then scored against the measured effect. Includes same-prompt state-swap controls,
-  norm-matched random directions, and a held-out intervention mechanism.
+  Research code for a preregistered external state-information audit on Gemma 3 1B, asking
+  whether access to a model's correct prompt-specific hidden state improves forecasts of how a
+  fixed internal intervention changes its clean preferred answer, beyond the prompt, the clean
+  output distribution, and a complete numerical description of the intervention. Predictors are
+  ridge regressions fitted and controlled by the authors; a ridge regression reading a residual
+  stream is a readout, not a self-report. Includes a frozen prompt split, a constructed
+  direction family, preregistered intervention-strength calibration, a matched wrong-state
+  control, and a salted-hash precommitment protocol. No forecasting result exists yet.
 keywords:
   - interpretability
   - ai-safety

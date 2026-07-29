@@ -1,4 +1,22 @@
-# BlueDot state-dependence study: current state audit
+# BlueDot state-dependence study: state audit of 2026-07-27
+
+> **Historical snapshot. Superseded, and kept for provenance.**
+>
+> This is the read-first audit the arm was scoped against, written on 2026-07-27 against commit
+> `809b345`. It is preserved because it records what was found and why several design decisions
+> were made, not because it describes the repository today.
+>
+> Most of it is now out of date by design. Sections 1 through 4 pin a commit, a working tree, and
+> test counts that have all moved. Sections 6, 8, 9, 10, and 17 describe capabilities that were
+> missing then and have since been built. Section 15's compute arithmetic was corrected in place
+> after this document was written and is superseded by `docs/compute_decision.md` section 5.
+>
+> For current status read, in this order: `docs/experiment_log.md` for what has been measured,
+> `docs/bluedot/execution_decision_tree.md` for which gates have passed, and `docs/build_plan.md`
+> for slice status. For the frozen design read
+> `docs/bluedot/preregistration_state_dependence.md`, which is where this audit's durable
+> findings ended up: the leakage risk in section 11 became the global-alpha rule in section 7.3,
+> and the schema conflicts in section 8 became the conflict table in section 15.
 
 Read-first audit of the `causal-self-forecasting` checkout before the BlueDot state-dependence
 study continues. No scientific code was modified. No calibration, training, or final-test

@@ -1,0 +1,55 @@
+# Calibration sweep at the primary layer for the BlueDot state-dependence arm.
+#
+# Gate G4 in docs/bluedot/execution_decision_tree.md, preregistered in
+# docs/bluedot/preregistration_state_dependence.md section 7.3. Every threshold this run is
+# judged against lives in the frozen plan, not here; this config only says which layer to sweep
+# and asserts that the manifests it will read are the ones the study froze.
+#
+# 32 prompts x (1 clean forward + 81 candidates) = 2,624 forwards.
+#
+# Calibration chooses an intervention strength. It measures nothing about the model's abilities
+# and cannot become a result.
+name: bluedot_state_dependence_calibration_layer13
+study_id: bluedot_state_dependence
+
+run_role: calibration
+prompt_role: calibration
+candidate_kind: calibration_grid
+
+target: delta_clean_top_margin
+
+model_ref: configs/models/gemma3_1b_it.yaml
+task_ref: configs/tasks/arc_mcq.yaml
+
+prompt_manifest_id: bluedot_state_dependence_v1
+direction_family_id: bluedot_state_dependence_directions_v1
+calibration_plan_id: bluedot_state_dependence_calibration_v1
+
+# Layer 13 is primary. Layer 20 is the only permitted fallback and has its own config, reachable
+# only from a layer-13 decision of fallback_required.
+layer: 13
+capture_position: -1
+
+# The frozen grid, ascending. The selection rule is "smallest passing ratio", so this order
+# decides which ratio wins. It must match the plan exactly; the run refuses otherwise.
+norm_ratios: [0.02, 0.05, 0.10, 0.20, 0.40]
+
+# Assertions, not inputs. Counts and dimensions are read from the frozen manifests and the loaded
+# model; these decide whether the run is allowed to proceed.
+expected_prompt_count: 32
+expected_direction_count: 8
+expected_signed_directions: 16
+expected_hidden_dim: 1152
+expected_role_counts:
+  smoke: 8
+  calibration: 32
+  training: 96
+  final_test: 32
+
+master_seed: 20260727
+
+# Must equal the plan's tolerance: the number a run is judged against is the planned one.
+noop_tolerance: 1.0e-3
+
+# Reported in the run diagnostics. The pass conditions come from the plan.
+effect_report_threshold: 0.10

@@ -1,0 +1,44 @@
+# Calibration sweep at the fallback layer for the BlueDot state-dependence arm.
+#
+# Gate G5. **Reachable from exactly one condition:** no layer-13 ratio satisfied every
+# preregistered criterion. The command refuses to run this config without `--primary-run-id`
+# naming a layer-13 run whose decision record says `fallback_required`, so the fallback cannot
+# become a second attempt after a layer-13 result someone did not like.
+#
+# Identical to the layer-13 config in every other respect: same 32 prompts, same direction
+# family, same five ratios, same conditions, same reference-norm procedure recomputed at this
+# layer. 2,624 forwards.
+name: bluedot_state_dependence_calibration_layer20
+study_id: bluedot_state_dependence
+
+run_role: calibration
+prompt_role: calibration
+candidate_kind: calibration_grid
+
+target: delta_clean_top_margin
+
+model_ref: configs/models/gemma3_1b_it.yaml
+task_ref: configs/tasks/arc_mcq.yaml
+
+prompt_manifest_id: bluedot_state_dependence_v1
+direction_family_id: bluedot_state_dependence_directions_v1
+calibration_plan_id: bluedot_state_dependence_calibration_v1
+
+layer: 20
+capture_position: -1
+
+norm_ratios: [0.02, 0.05, 0.10, 0.20, 0.40]
+
+expected_prompt_count: 32
+expected_direction_count: 8
+expected_signed_directions: 16
+expected_hidden_dim: 1152
+expected_role_counts:
+  smoke: 8
+  calibration: 32
+  training: 96
+  final_test: 32
+
+master_seed: 20260727
+noop_tolerance: 1.0e-3
+effect_report_threshold: 0.10

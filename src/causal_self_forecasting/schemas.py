@@ -1857,7 +1857,11 @@ class StateAuditRunDiagnostics(Base):
         return self
 
 
-STUDY_RUN_HASHED_FIELDS = (
+# Hashed fields every state-audit run shares. A single-strength run adds its one ratio and
+# alpha; a calibration run adds the grid, the summaries, and the decision. Order inside these
+# tuples is irrelevant to the digest, because canonical JSON sorts keys; the tuples exist to say
+# exactly which fields a hash covers and which are provenance.
+_STATE_AUDIT_RUN_SHARED_HASHED_FIELDS = (
     "schema_version",
     "study_id",
     "run_id",
@@ -1877,9 +1881,7 @@ STUDY_RUN_HASHED_FIELDS = (
     "calibration_plan_hash",
     "layer",
     "capture_position",
-    "norm_ratio",
     "reference_norm",
-    "global_alpha",
     "reference_norm_source",
     "expected_prompt_count",
     "expected_candidates_per_prompt",
@@ -1906,6 +1908,25 @@ STUDY_RUN_HASHED_FIELDS = (
     "status",
 )
 
+STUDY_RUN_HASHED_FIELDS = (
+    *_STATE_AUDIT_RUN_SHARED_HASHED_FIELDS,
+    "norm_ratio",
+    "global_alpha",
+)
+
+CALIBRATION_RUN_HASHED_FIELDS = (
+    *_STATE_AUDIT_RUN_SHARED_HASHED_FIELDS,
+    "norm_ratios",
+    "global_alphas",
+    "reference_norm_record_hash",
+    "ratio_summaries_hash",
+    "decision_hash",
+    "decision_status",
+    "selected_layer",
+    "selected_norm_ratio",
+    "selected_global_alpha",
+)
+
 
 def study_run_payload(dumped: dict[str, Any]) -> dict[str, Any]:
     missing = [name for name in STUDY_RUN_HASHED_FIELDS if name not in dumped]
@@ -1918,12 +1939,24 @@ def compute_study_run_hash(dumped: dict[str, Any]) -> str:
     return hash_object(study_run_payload(dumped))
 
 
-class StudyRunManifest(Versioned):
-    """What one state-dependence run did, and whether it finished.
+def calibration_run_payload(dumped: dict[str, Any]) -> dict[str, Any]:
+    missing = [name for name in CALIBRATION_RUN_HASHED_FIELDS if name not in dumped]
+    if missing:
+        raise ValueError(f"calibration run dump is missing hashed fields: {missing}")
+    return {name: dumped[name] for name in CALIBRATION_RUN_HASHED_FIELDS}
 
-    `status` is derived, not asserted. The validator refuses a manifest that calls itself
-    complete while a count is short or a failure was recorded, so a run that went wrong stays
-    visibly wrong instead of being written up as a run that worked.
+
+def compute_calibration_run_hash(dumped: dict[str, Any]) -> str:
+    return hash_object(calibration_run_payload(dumped))
+
+
+class StateAuditRunBase(Versioned):
+    """What every state-dependence run records, whatever strength it ran at.
+
+    Split out so that a grid run and a single-strength run share one definition of identity,
+    provenance, and completeness rather than two that can drift apart. The two differ in exactly
+    one place, which is how strength is described: one ratio and one alpha, or the frozen grid
+    with one alpha per ratio.
     """
 
     study_id: Identifier
@@ -1947,9 +1980,7 @@ class StudyRunManifest(Versioned):
 
     layer: int = Field(ge=0)
     capture_position: int
-    norm_ratio: float = Field(gt=0.0)
     reference_norm: float = Field(gt=0.0)
-    global_alpha: float = Field(gt=0.0)
     reference_norm_source: str
 
     expected_prompt_count: int = Field(gt=0)
@@ -1992,89 +2023,194 @@ class StudyRunManifest(Versioned):
     completed_at: datetime | None = None
     notes: str | None = None
 
+
+def check_state_audit_run_counts(record: StateAuditRunBase) -> None:
+    """Check the planned arithmetic, the descriptive accuracy, and the derived status.
+
+    `status` is derived, not asserted. A manifest that calls itself complete while a count is
+    short or a failure was recorded is refused, so a run that went wrong stays visibly wrong
+    instead of being written up as a run that worked.
+    """
+    candidates = record.expected_candidates_per_prompt
+    planned = [
+        (
+            "expected_non_noop_observations",
+            record.expected_non_noop_observations,
+            record.expected_prompt_count * (candidates - 1),
+        ),
+        (
+            "expected_noop_observations",
+            record.expected_noop_observations,
+            record.expected_prompt_count,
+        ),
+        (
+            "expected_forward_count",
+            record.expected_forward_count,
+            record.expected_prompt_count * (1 + candidates),
+        ),
+    ]
+    wrong = [
+        f"{name} is {actual}, expected {expected}"
+        for name, actual, expected in planned
+        if actual != expected
+    ]
+    if wrong:
+        raise ValueError(f"the planned run arithmetic does not add up: {wrong}")
+
+    if record.clean_correct_count > record.clean_scored_count:
+        raise ValueError("clean_correct_count exceeds clean_scored_count")
+    if record.clean_scored_count == 0:
+        if record.clean_accuracy_descriptive is not None:
+            raise ValueError("clean accuracy must be null when nothing was scored")
+    else:
+        expected_accuracy = record.clean_correct_count / record.clean_scored_count
+        if record.clean_accuracy_descriptive is None or (
+            abs(record.clean_accuracy_descriptive - expected_accuracy) > 1e-9
+        ):
+            raise ValueError(
+                f"clean_accuracy_descriptive {record.clean_accuracy_descriptive} does not match "
+                f"clean_correct_count / clean_scored_count ({expected_accuracy})"
+            )
+
+    shortfalls = [
+        name
+        for name, actual, expected in (
+            ("prompts", record.observed_prompt_count, record.expected_prompt_count),
+            ("states", record.observed_state_count, record.expected_prompt_count),
+            (
+                "non-noop observations",
+                record.observed_non_noop_observations,
+                record.expected_non_noop_observations,
+            ),
+            (
+                "no-op observations",
+                record.observed_noop_observations,
+                record.expected_noop_observations,
+            ),
+            ("forwards", record.observed_forward_count, record.expected_forward_count),
+        )
+        if actual != expected
+    ]
+    complete = not shortfalls and record.failure_count == 0
+    if record.status == "complete" and not complete:
+        raise ValueError(
+            f"run {record.run_id} calls itself complete but {record.failure_count} failures were "
+            f"recorded and these counts do not match the plan: {shortfalls}. A run that did "
+            "not finish must stay marked failed."
+        )
+    if record.status == "failed" and complete:
+        raise ValueError(
+            f"run {record.run_id} is marked failed but every count matches the plan and no "
+            "failure was recorded; a successful run must not be filed as a failure"
+        )
+
+
+def check_alpha_rule(ratio: float, reference: float, alpha: float) -> None:
+    """`alpha = ratio * reference_norm`, checked rather than trusted."""
+    expected = ratio * reference
+    if abs(alpha - expected) > 1e-9 * max(1.0, abs(expected)):
+        raise ValueError(
+            f"global alpha {alpha} is not norm_ratio * reference_norm ({expected}); the strength "
+            "rule is the ratio times the reference norm"
+        )
+
+
+class StudyRunManifest(StateAuditRunBase):
+    """A run executed at one selected strength: smoke, training, or final test."""
+
+    norm_ratio: float = Field(gt=0.0)
+    global_alpha: float = Field(gt=0.0)
+
     @model_validator(mode="after")
     def _check_run(self) -> StudyRunManifest:
-        candidates = self.expected_candidates_per_prompt
-        planned = [
-            (
-                "expected_non_noop_observations",
-                self.expected_non_noop_observations,
-                self.expected_prompt_count * (candidates - 1),
-            ),
-            (
-                "expected_noop_observations",
-                self.expected_noop_observations,
-                self.expected_prompt_count,
-            ),
-            (
-                "expected_forward_count",
-                self.expected_forward_count,
-                self.expected_prompt_count * (1 + candidates),
-            ),
-        ]
-        wrong = [
-            f"{name} is {actual}, expected {expected}"
-            for name, actual, expected in planned
-            if actual != expected
-        ]
-        if wrong:
-            raise ValueError(f"the planned run arithmetic does not add up: {wrong}")
-
-        expected_alpha = self.norm_ratio * self.reference_norm
-        if abs(self.global_alpha - expected_alpha) > 1e-9 * max(1.0, abs(expected_alpha)):
-            raise ValueError(
-                f"global_alpha {self.global_alpha} is not norm_ratio * reference_norm "
-                f"({expected_alpha}); the strength rule is ratio times the reference norm"
-            )
-
-        if self.clean_correct_count > self.clean_scored_count:
-            raise ValueError("clean_correct_count exceeds clean_scored_count")
-        if self.clean_scored_count == 0:
-            if self.clean_accuracy_descriptive is not None:
-                raise ValueError("clean accuracy must be null when nothing was scored")
-        else:
-            expected_accuracy = self.clean_correct_count / self.clean_scored_count
-            if self.clean_accuracy_descriptive is None or (
-                abs(self.clean_accuracy_descriptive - expected_accuracy) > 1e-9
-            ):
-                raise ValueError(
-                    f"clean_accuracy_descriptive {self.clean_accuracy_descriptive} does not match "
-                    f"clean_correct_count / clean_scored_count ({expected_accuracy})"
-                )
-
-        shortfalls = [
-            name
-            for name, actual, expected in (
-                ("prompts", self.observed_prompt_count, self.expected_prompt_count),
-                ("states", self.observed_state_count, self.expected_prompt_count),
-                (
-                    "non-noop observations",
-                    self.observed_non_noop_observations,
-                    self.expected_non_noop_observations,
-                ),
-                (
-                    "no-op observations",
-                    self.observed_noop_observations,
-                    self.expected_noop_observations,
-                ),
-                ("forwards", self.observed_forward_count, self.expected_forward_count),
-            )
-            if actual != expected
-        ]
-        complete = not shortfalls and self.failure_count == 0
-        if self.status == "complete" and not complete:
-            raise ValueError(
-                f"run {self.run_id} calls itself complete but {self.failure_count} failures were "
-                f"recorded and these counts do not match the plan: {shortfalls}. A run that did "
-                "not finish must stay marked failed."
-            )
-        if self.status == "failed" and complete:
-            raise ValueError(
-                f"run {self.run_id} is marked failed but every count matches the plan and no "
-                "failure was recorded; a successful run must not be filed as a failure"
-            )
+        check_state_audit_run_counts(self)
+        check_alpha_rule(self.norm_ratio, self.reference_norm, self.global_alpha)
 
         recomputed = compute_study_run_hash(self.model_dump(mode="json"))
+        if recomputed != self.manifest_hash:
+            raise ValueError(
+                f"manifest_hash {self.manifest_hash} does not match the run contents "
+                f"({recomputed}); the file has been edited since it was written"
+            )
+        return self
+
+
+class CalibrationRunManifest(StateAuditRunBase):
+    """A calibration run: the whole frozen ratio grid at one layer, with its decision.
+
+    Kept apart from `StudyRunManifest` because a calibration run has no single strength. It
+    carries one alpha per ratio, all derived from the same reference norm, and the decision the
+    preregistered state machine produced from its own summaries.
+    """
+
+    norm_ratios: list[float] = Field(min_length=1)
+    global_alphas: list[float] = Field(min_length=1)
+    reference_norm_record_hash: HashString
+    ratio_summaries_hash: HashString
+    decision_hash: HashString
+    decision_status: CalibrationStatus
+    selected_layer: int | None = None
+    selected_norm_ratio: float | None = None
+    selected_global_alpha: float | None = None
+
+    @model_validator(mode="after")
+    def _check_calibration_run(self) -> CalibrationRunManifest:
+        check_state_audit_run_counts(self)
+
+        ratios = [float(ratio) for ratio in self.norm_ratios]
+        if ratios != sorted(ratios):
+            raise ValueError(
+                "norm_ratios must be ascending, because the selection rule is 'smallest passing "
+                "ratio' and reordering would change which ratio wins"
+            )
+        if len(set(ratios)) != len(ratios):
+            raise ValueError("norm_ratios must not repeat a ratio")
+        if any(ratio <= 0.0 for ratio in ratios):
+            raise ValueError("every norm ratio must be positive")
+        if len(self.global_alphas) != len(ratios):
+            raise ValueError(
+                f"{len(self.global_alphas)} alphas for {len(ratios)} ratios; there is exactly one "
+                "global alpha per ratio at a layer"
+            )
+        for ratio, alpha in zip(ratios, self.global_alphas, strict=True):
+            check_alpha_rule(ratio, self.reference_norm, alpha)
+
+        signed = self.expected_candidates_per_prompt - 1
+        if signed % len(ratios) != 0:
+            raise ValueError(
+                f"{signed} signed candidates do not divide evenly across {len(ratios)} ratios; "
+                "the grid must carry the same signed directions at every ratio"
+            )
+
+        selected = (self.selected_layer, self.selected_norm_ratio, self.selected_global_alpha)
+        succeeded = self.decision_status in (
+            CalibrationStatus.PASSED_PRIMARY,
+            CalibrationStatus.PASSED_FALLBACK,
+        )
+        if succeeded:
+            if any(value is None for value in selected):
+                raise ValueError(
+                    f"decision status {self.decision_status.value} requires a selected layer, "
+                    "ratio, and alpha"
+                )
+            if self.selected_norm_ratio not in ratios:
+                raise ValueError(
+                    f"the selected ratio {self.selected_norm_ratio} is not on this run's grid "
+                    f"{ratios}"
+                )
+            expected_alpha = self.global_alphas[ratios.index(float(self.selected_norm_ratio))]
+            if self.selected_global_alpha != expected_alpha:
+                raise ValueError(
+                    f"the selected alpha {self.selected_global_alpha} is not the alpha this run "
+                    f"used at ratio {self.selected_norm_ratio} ({expected_alpha})"
+                )
+        elif any(value is not None for value in selected):
+            raise ValueError(
+                f"decision status {self.decision_status.value} must not carry a selection; "
+                "nothing was selected"
+            )
+
+        recomputed = compute_calibration_run_hash(self.model_dump(mode="json"))
         if recomputed != self.manifest_hash:
             raise ValueError(
                 f"manifest_hash {self.manifest_hash} does not match the run contents "

@@ -46,6 +46,11 @@ STATE_AUDIT_CANDIDATE_SETS = "state_audit_candidate_sets.jsonl"
 STATE_AUDIT_STATE_REFS = "state_audit_state_refs.jsonl"
 STATE_AUDIT_STATES = "state_audit_states.npz"
 STATE_AUDIT_CLEAN_PASS = "state_audit_clean_pass.jsonl"
+# Calibration-only artifacts. A selected-strength run writes none of them, because it decides
+# nothing.
+STATE_AUDIT_REFERENCE_NORM = "state_audit_reference_norm.json"
+STATE_AUDIT_RATIO_SUMMARIES = "state_audit_ratio_summaries.json"
+STATE_AUDIT_DECISION = "state_audit_calibration_decision.json"
 
 
 def data_dir() -> Path:

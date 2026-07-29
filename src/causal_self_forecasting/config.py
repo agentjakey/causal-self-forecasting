@@ -14,7 +14,15 @@ import yaml
 from pydantic import ConfigDict, Field, model_validator
 
 from .hashing import hash_object
-from .schemas import Base, Framing, Mechanism, PromptRole, Split, StudyRunRole
+from .schemas import (
+    Base,
+    Framing,
+    Mechanism,
+    PromptRole,
+    Split,
+    StateAuditCandidateKind,
+    StudyRunRole,
+)
 
 
 def repo_root() -> Path:
@@ -326,7 +334,11 @@ class StateAuditRunConfig(Base):
 
     layer: int
     capture_position: int = -1
-    norm_ratio: float
+    # A selected-strength run names one ratio; a calibration run names the whole frozen grid.
+    # Exactly one of the two is set, so a config cannot half-describe which strengths it runs.
+    candidate_kind: StateAuditCandidateKind = StateAuditCandidateKind.SELECTED_STRENGTH
+    norm_ratio: float | None = None
+    norm_ratios: list[float] | None = None
 
     expected_prompt_count: int = Field(gt=0)
     expected_direction_count: int = Field(gt=0)
@@ -351,12 +363,37 @@ class StateAuditRunConfig(Base):
                 f"layer {self.layer} is not one of the preregistered layers "
                 f"{list(ALLOWED_CALIBRATION_LAYERS)}; no other layer may be run"
             )
-        if float(self.norm_ratio) not in FROZEN_NORM_RATIOS:
-            raise ValueError(
-                f"norm_ratio {self.norm_ratio} is not on the frozen grid "
-                f"{list(FROZEN_NORM_RATIOS)}; a strength off the grid is an amendment, not a "
-                "config change"
-            )
+
+        grid = self.candidate_kind is StateAuditCandidateKind.CALIBRATION_GRID
+        if grid:
+            if self.norm_ratio is not None:
+                raise ValueError(
+                    "a calibration-grid run sweeps norm_ratios and must not also name a single "
+                    "norm_ratio; one of the two would be silently ignored"
+                )
+            if self.norm_ratios is None:
+                raise ValueError("a calibration-grid run must name norm_ratios")
+            if tuple(float(ratio) for ratio in self.norm_ratios) != FROZEN_NORM_RATIOS:
+                raise ValueError(
+                    f"norm_ratios must be exactly {list(FROZEN_NORM_RATIOS)} in that order, got "
+                    f"{self.norm_ratios}. Widening or reordering the grid after preregistration "
+                    "is an amendment, not a config change."
+                )
+        else:
+            if self.norm_ratios is not None:
+                raise ValueError(
+                    "a selected-strength run applies one ratio and must not name norm_ratios; "
+                    "the five-ratio grid belongs to calibration"
+                )
+            if self.norm_ratio is None:
+                raise ValueError("a selected-strength run must name a norm_ratio")
+            if float(self.norm_ratio) not in FROZEN_NORM_RATIOS:
+                raise ValueError(
+                    f"norm_ratio {self.norm_ratio} is not on the frozen grid "
+                    f"{list(FROZEN_NORM_RATIOS)}; a strength off the grid is an amendment, not a "
+                    "config change"
+                )
+
         if self.expected_signed_directions != 2 * self.expected_direction_count:
             raise ValueError(
                 f"expected_signed_directions {self.expected_signed_directions} is not two per "
@@ -378,9 +415,18 @@ class StateAuditRunConfig(Base):
         return self
 
     @property
+    def ratio_grid(self) -> tuple[float, ...]:
+        """Every ratio this run applies, ascending. One entry unless it is a calibration grid."""
+        if self.norm_ratios is not None:
+            return tuple(float(ratio) for ratio in self.norm_ratios)
+        if self.norm_ratio is None:
+            raise ValueError("the config names neither a norm_ratio nor a norm_ratios grid")
+        return (float(self.norm_ratio),)
+
+    @property
     def candidates_per_prompt(self) -> int:
-        """Signed directions plus one no-op. The selected-strength shape."""
-        return self.expected_signed_directions + 1
+        """Signed directions at every ratio, plus one shared no-op."""
+        return self.expected_signed_directions * len(self.ratio_grid) + 1
 
     @property
     def expected_forward_count(self) -> int:

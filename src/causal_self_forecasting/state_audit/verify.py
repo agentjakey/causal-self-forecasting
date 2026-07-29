@@ -42,17 +42,22 @@ from ..paths import (
     STATE_AUDIT_CLEAN_PASS,
     STATE_AUDIT_FAILURES,
     STATE_AUDIT_OBSERVATIONS,
+    STATE_AUDIT_RATIO_SUMMARIES,
+    STATE_AUDIT_REFERENCE_NORM,
     STATE_AUDIT_STATES,
     run_dir,
 )
 from ..schemas import (
+    CalibrationRunManifest,
     StateAuditCandidateSet,
     StateAuditCleanPassRecord,
     StateAuditObservationRecord,
+    StateAuditRunBase,
     StudyRunManifest,
 )
 from ..tasks.prompt_manifest import PromptManifestError, load_prompt_manifest
-from .run import StateAuditRunError, load_study_run_manifest
+from .calibrate import load_decision
+from .run import StateAuditRunError, load_state_audit_run_manifest
 
 # How far a recomputed reference norm may sit from the recorded one. Both are `numpy.median` over
 # the same float64 values, so anything above round-off means the recorded number did not come
@@ -96,7 +101,7 @@ def read_failures(run_id: str) -> list[dict[str, Any]]:
 
 
 def _check_artifact_hashes(
-    manifest: StudyRunManifest, directory: Path, failures: list[str]
+    manifest: StateAuditRunBase, directory: Path, failures: list[str]
 ) -> None:
     expected = [
         (STATE_AUDIT_OBSERVATIONS, manifest.observations_hash, True),
@@ -123,7 +128,7 @@ def _check_artifact_hashes(
             failures.append(f"{name} hashes to {actual} but the manifest cites {recorded}")
 
 
-def _check_cited_manifests(manifest: StudyRunManifest, failures: list[str]) -> None:
+def _check_cited_manifests(manifest: StateAuditRunBase, failures: list[str]) -> None:
     try:
         prompts = load_prompt_manifest(manifest.prompt_manifest_id)
         if prompts.manifest_hash != manifest.prompt_manifest_hash:
@@ -155,14 +160,28 @@ def _check_cited_manifests(manifest: StudyRunManifest, failures: list[str]) -> N
         failures.append(f"calibration plan: {error}")
 
 
+def manifest_strengths(manifest: StateAuditRunBase) -> list[tuple[float, float]]:
+    """The (ratio, alpha) pairs a run used, whichever manifest shape it has."""
+    if isinstance(manifest, CalibrationRunManifest):
+        return [
+            (float(ratio), float(alpha))
+            for ratio, alpha in zip(manifest.norm_ratios, manifest.global_alphas, strict=True)
+        ]
+    if isinstance(manifest, StudyRunManifest):
+        return [(float(manifest.norm_ratio), float(manifest.global_alpha))]
+    raise StateAuditRunError(f"unhandled run manifest type {type(manifest).__name__}")
+
+
 def _check_observations(
-    manifest: StudyRunManifest,
+    manifest: StateAuditRunBase,
     observations: Sequence[StateAuditObservationRecord],
     candidate_sets: Sequence[StateAuditCandidateSet],
     failures: list[str],
 ) -> dict[str, Any]:
     signed = [record for record in observations if not record.is_noop]
     noops = [record for record in observations if record.is_noop]
+    strengths = manifest_strengths(manifest)
+    alpha_by_ratio = dict(strengths)
 
     if len(signed) != manifest.observed_non_noop_observations:
         failures.append(
@@ -178,10 +197,11 @@ def _check_observations(
     wrong_layer = sorted({record.layer for record in observations} - {manifest.layer})
     if wrong_layer:
         failures.append(f"observations were recorded at layers {wrong_layer}, not {manifest.layer}")
-    wrong_ratio = sorted({record.norm_ratio for record in signed} - {float(manifest.norm_ratio)})
+    wrong_ratio = sorted({record.norm_ratio for record in signed} - set(alpha_by_ratio))
     if wrong_ratio:
         failures.append(
-            f"signed observations carry ratios {wrong_ratio}, not {manifest.norm_ratio}"
+            f"signed observations carry ratios {wrong_ratio}, which are not on this run's grid "
+            f"{sorted(alpha_by_ratio)}"
         )
     wrong_target = sorted({record.target_name for record in observations} - {manifest.target_name})
     if wrong_target:
@@ -194,20 +214,27 @@ def _check_observations(
             f"observations carry prompt roles {wrong_role}, not {manifest.prompt_role.value}"
         )
 
-    global_alpha: float | None = None
-    if signed:
+    # One global alpha per (layer, ratio), checked per grid point. Every observation is compared
+    # individually, so a single prompt-specific strength cannot hide behind its neighbours.
+    observed_alphas: dict[str, float] = {}
+    for ratio, recorded_alpha in strengths:
+        at_ratio = [record for record in signed if record.norm_ratio == ratio]
+        if not at_ratio:
+            failures.append(f"the run records ratio {ratio} but no observation used it")
+            continue
         try:
-            global_alpha = check_global_alpha(
-                [(record.candidate_id, record.global_alpha) for record in signed],
+            used = check_global_alpha(
+                [(record.candidate_id, record.global_alpha) for record in at_ratio],
                 manifest.layer,
-                float(manifest.norm_ratio),
+                ratio,
             )
         except StrengthError as error:
             failures.append(str(error))
-        if global_alpha is not None and global_alpha != manifest.global_alpha:
+            continue
+        observed_alphas[f"{ratio:g}"] = used
+        if used != recorded_alpha:
             failures.append(
-                f"the observations used alpha {global_alpha} but the manifest records "
-                f"{manifest.global_alpha}"
+                f"ratio {ratio} used alpha {used} but the manifest records {recorded_alpha}"
             )
 
     non_finite = [
@@ -246,7 +273,7 @@ def _check_observations(
     return {
         "non_noop_observations": len(signed),
         "noop_observations": len(noops),
-        "global_alpha": global_alpha,
+        "global_alphas_by_ratio": observed_alphas,
         "max_abs_noop_target": max_abs_noop,
         "candidate_pairs_expected": len(expected_pairs),
         "candidate_pairs_observed": len(observed_pairs),
@@ -254,31 +281,36 @@ def _check_observations(
 
 
 def _check_reference_norm(
-    manifest: StudyRunManifest,
+    manifest: StateAuditRunBase,
     clean_records: Sequence[StateAuditCleanPassRecord],
     failures: list[str],
 ) -> dict[str, Any]:
     if not clean_records:
         failures.append("the clean-pass artifact is empty, so the reference norm cannot be checked")
-        return {"recomputed_reference_norm": None, "recomputed_global_alpha": None}
+        return {"recomputed_reference_norm": None, "recomputed_global_alphas": None}
 
     norms = np.asarray(
         [record.state_norm for record in sorted(clean_records, key=lambda r: r.variant_id)],
         dtype=np.float64,
     )
     recomputed = float(np.median(norms))
-    recomputed_alpha = float(np.float64(manifest.norm_ratio) * np.float64(recomputed))
+    recomputed_alphas = {
+        f"{ratio:g}": float(np.float64(ratio) * np.float64(recomputed))
+        for ratio, _ in manifest_strengths(manifest)
+    }
 
     if abs(recomputed - manifest.reference_norm) > NORM_TOLERANCE * max(1.0, recomputed):
         failures.append(
             f"the reference norm recomputes as {recomputed} from the recorded clean state norms "
             f"but the manifest records {manifest.reference_norm}"
         )
-    if abs(recomputed_alpha - manifest.global_alpha) > NORM_TOLERANCE * max(1.0, recomputed_alpha):
-        failures.append(
-            f"the global alpha recomputes as {recomputed_alpha} but the manifest records "
-            f"{manifest.global_alpha}"
-        )
+    for ratio, recorded_alpha in manifest_strengths(manifest):
+        expected = recomputed_alphas[f"{ratio:g}"]
+        if abs(expected - recorded_alpha) > NORM_TOLERANCE * max(1.0, expected):
+            failures.append(
+                f"the alpha for ratio {ratio} recomputes as {expected} but the manifest records "
+                f"{recorded_alpha}"
+            )
 
     dims = sorted({record.state_dim for record in clean_records})
     if dims != [manifest.diagnostics.state_dim]:
@@ -304,15 +336,77 @@ def _check_reference_norm(
 
     return {
         "recomputed_reference_norm": recomputed,
-        "recomputed_global_alpha": recomputed_alpha,
+        "recomputed_global_alphas": recomputed_alphas,
         "median_method": MEDIAN_METHOD,
         "clean_state_count": len(clean_records),
     }
 
 
+def _check_calibration_artifacts(
+    manifest: CalibrationRunManifest, directory: Path, failures: list[str]
+) -> dict[str, Any]:
+    """Check a calibration run's decision against the summaries it was made from.
+
+    The decision is recomputed from the recorded summaries rather than trusted: the selector is
+    deterministic, so a decision that does not fall out of the summaries beside it means one of
+    the two was edited.
+    """
+    for name, recorded in (
+        (STATE_AUDIT_REFERENCE_NORM, manifest.reference_norm_record_hash),
+        (STATE_AUDIT_RATIO_SUMMARIES, manifest.ratio_summaries_hash),
+    ):
+        path = directory / name
+        if not path.exists():
+            failures.append(f"{name} is missing but the manifest cites hash {recorded}")
+            continue
+        actual = hash_file(path)
+        if actual != recorded:
+            failures.append(f"{name} hashes to {actual} but the manifest cites {recorded}")
+
+    report: dict[str, Any] = {"decision_status": manifest.decision_status.value}
+    try:
+        decision = load_decision(manifest.run_id)
+    except StateAuditRunError as error:
+        failures.append(f"calibration decision: {error}")
+        return report
+
+    if decision.decision_hash != manifest.decision_hash:
+        failures.append("the decision on disk has a different hash than the manifest cites")
+    if decision.status is not manifest.decision_status:
+        failures.append(
+            f"the decision on disk says {decision.status.value!r} but the manifest says "
+            f"{manifest.decision_status.value!r}"
+        )
+    if decision.plan_hash != manifest.calibration_plan_hash:
+        failures.append("the decision was made under a different calibration plan than the run")
+
+    at_layer = [summary for summary in decision.ratio_summaries if summary.layer == manifest.layer]
+    if len(at_layer) != len(manifest.norm_ratios):
+        failures.append(
+            f"the decision carries {len(at_layer)} summaries at layer {manifest.layer} but the "
+            f"run swept {len(manifest.norm_ratios)} ratios"
+        )
+    passing = [summary.norm_ratio for summary in at_layer if summary.passed]
+    report["passing_ratios_at_this_layer"] = passing
+    report["smallest_passing_ratio_at_this_layer"] = min(passing) if passing else None
+
+    if manifest.selected_norm_ratio is not None and manifest.selected_layer == manifest.layer:
+        if not passing:
+            failures.append(
+                "the run selected a ratio but no summary at this layer passed every condition"
+            )
+        elif manifest.selected_norm_ratio != min(passing):
+            failures.append(
+                f"the run selected ratio {manifest.selected_norm_ratio} but the smallest passing "
+                f"ratio at layer {manifest.layer} is {min(passing)}; the rule is the smallest, "
+                "not the largest effect"
+            )
+    return report
+
+
 def verify_run(run_id: str, noop_tolerance: float | None = None) -> dict[str, Any]:
     """Verify one state-dependence run from its artifacts. Loads no model."""
-    manifest = load_study_run_manifest(run_id)
+    manifest = load_state_audit_run_manifest(run_id)
     directory = run_dir(run_id)
     failures: list[str] = []
 
@@ -361,13 +455,18 @@ def verify_run(run_id: str, noop_tolerance: float | None = None) -> dict[str, An
             "the manifest's recorded worst no-op target does not match the observations on disk"
         )
 
+    calibration_report: dict[str, Any] | None = None
+    if isinstance(manifest, CalibrationRunManifest):
+        calibration_report = _check_calibration_artifacts(manifest, directory, failures)
+
     if manifest.status != "complete":
         failures.append(
             f"run {run_id!r} is marked {manifest.status!r}; a run that did not finish is not a "
             "verified run"
         )
 
-    return {
+    strengths = manifest_strengths(manifest)
+    report: dict[str, Any] = {
         "run_id": run_id,
         "run_role": manifest.run_role.value,
         "status": manifest.status,
@@ -383,9 +482,9 @@ def verify_run(run_id: str, noop_tolerance: float | None = None) -> dict[str, An
         "direction_family_hash": manifest.direction_family_hash,
         "calibration_plan_hash": manifest.calibration_plan_hash,
         "layer": manifest.layer,
-        "norm_ratio": manifest.norm_ratio,
+        "norm_ratios": [ratio for ratio, _ in strengths],
         "reference_norm": manifest.reference_norm,
-        "global_alpha": manifest.global_alpha,
+        "global_alphas": [alpha for _, alpha in strengths],
         "noop_tolerance": tolerance,
         "observations_read": len(observations),
         "failures_read": len(recorded_failures),
@@ -395,9 +494,15 @@ def verify_run(run_id: str, noop_tolerance: float | None = None) -> dict[str, An
         "diagnostics": manifest.diagnostics.model_dump(mode="json"),
         "notes": (
             "Artifact verification only. No model was loaded and no forward pass ran. A verified "
-            "engineering run is a working pipeline, not a scientific result."
+            "run is a working pipeline or a recorded strength decision, not a scientific result."
         ),
     }
+    if isinstance(manifest, CalibrationRunManifest) and calibration_report is not None:
+        report["calibration_checks"] = calibration_report
+        report["selected_layer"] = manifest.selected_layer
+        report["selected_norm_ratio"] = manifest.selected_norm_ratio
+        report["selected_global_alpha"] = manifest.selected_global_alpha
+    return report
 
 
 def compare_runs(run_id: str, other_run_id: str, tolerance: float = 0.0) -> dict[str, Any]:
@@ -409,15 +514,15 @@ def compare_runs(run_id: str, other_run_id: str, tolerance: float = 0.0) -> dict
     pinned weights has no reason to move at all; a looser tolerance may be passed to quantify
     drift rather than to excuse it.
     """
-    left = load_study_run_manifest(run_id)
-    right = load_study_run_manifest(other_run_id)
+    left = load_state_audit_run_manifest(run_id)
+    right = load_state_audit_run_manifest(other_run_id)
 
     mismatches: list[str] = []
     for name, a, b in (
         ("run_role", left.run_role.value, right.run_role.value),
         ("prompt_role", left.prompt_role.value, right.prompt_role.value),
         ("layer", left.layer, right.layer),
-        ("norm_ratio", left.norm_ratio, right.norm_ratio),
+        ("strengths", manifest_strengths(left), manifest_strengths(right)),
         ("model_revision", left.model_revision, right.model_revision),
         ("prompt_manifest_hash", left.prompt_manifest_hash, right.prompt_manifest_hash),
         ("direction_family_hash", left.direction_family_hash, right.direction_family_hash),
@@ -468,7 +573,15 @@ def compare_runs(run_id: str, other_run_id: str, tolerance: float = 0.0) -> dict
         "max_abs_target_difference": worst_target_delta,
         "max_abs_logit_difference": worst_logit_delta,
         "reference_norm_difference": abs(left.reference_norm - right.reference_norm),
-        "global_alpha_difference": abs(left.global_alpha - right.global_alpha),
+        "max_abs_alpha_difference": max(
+            (
+                abs(a - b)
+                for (_, a), (_, b) in zip(
+                    manifest_strengths(left), manifest_strengths(right), strict=True
+                )
+            ),
+            default=0.0,
+        ),
         "differences": differences[:10],
         "scientific_result": False,
     }
@@ -477,6 +590,7 @@ def compare_runs(run_id: str, other_run_id: str, tolerance: float = 0.0) -> dict
 __all__ = [
     "NORM_TOLERANCE",
     "compare_runs",
+    "manifest_strengths",
     "read_candidate_sets",
     "read_clean_pass",
     "read_failures",

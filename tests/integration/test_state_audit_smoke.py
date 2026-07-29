@@ -412,9 +412,12 @@ def test_the_smoke_uses_one_global_alpha_for_every_prompt(workspace: Workspace) 
         if not row["is_noop"]
     }
     assert len(alphas) == 1
-    assert alphas == {report["global_alpha"]}
-    assert report["global_alpha"] == pytest.approx(0.10 * report["reference_norm"])
-    assert report["observation_checks"]["global_alpha"] == pytest.approx(report["global_alpha"])
+    assert report["norm_ratios"] == [0.10]
+    assert alphas == set(report["global_alphas"])
+    assert report["global_alphas"][0] == pytest.approx(0.10 * report["reference_norm"])
+    assert report["observation_checks"]["global_alphas_by_ratio"]["0.1"] == pytest.approx(
+        report["global_alphas"][0]
+    )
 
 
 def test_the_reference_norm_is_the_median_of_the_recorded_clean_state_norms(
@@ -605,7 +608,7 @@ def test_a_rerun_into_a_new_run_id_is_deterministic(workspace: Workspace) -> Non
     assert determinism["max_abs_target_difference"] == 0.0
     assert determinism["max_abs_logit_difference"] == 0.0
     assert determinism["reference_norm_difference"] == 0.0
-    assert determinism["global_alpha_difference"] == 0.0
+    assert determinism["max_abs_alpha_difference"] == 0.0
 
 
 def test_rerunning_the_same_run_id_is_refused(workspace: Workspace) -> None:

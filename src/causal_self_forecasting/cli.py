@@ -636,6 +636,75 @@ def state_audit_smoke(
         raise typer.Exit(code=1)
 
 
+@state_audit_app.command("calibrate")
+def state_audit_calibrate(
+    config: Path = typer.Option(..., "--config", help="Path to a calibration run config."),
+    run_id: str = typer.Option(..., "--run-id", help="Run id to write artifacts under."),
+    primary_run_id: str | None = typer.Option(
+        None,
+        "--primary-run-id",
+        help="The layer-13 run this falls back from. Required only for the fallback layer.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite a documented partial or failed run at this id. Never a completed one.",
+    ),
+) -> None:
+    """Run the preregistered calibration sweep at one layer and record the decision.
+
+    Loads the model. Captures the clean state for all 32 calibration prompts, takes the median as
+    the reference norm before any intervention runs, derives one global alpha per frozen ratio,
+    then applies 8 directions x 2 signs x 5 ratios plus one shared no-op to every prompt: 2,624
+    forwards. It then evaluates the six preregistered conditions per ratio and takes the
+    **smallest** passing one.
+
+    Calibration chooses an intervention strength. It measures nothing about the model's abilities
+    and is not a scientific result. Thresholds, ratios, prompts, target, and layers all come from
+    the frozen plan and are not adjustable here. The layer-20 fallback is refused unless the
+    layer-13 run it names recorded `fallback_required`.
+    """
+    from .state_audit.calibrate import run_calibration
+    from .state_audit.run import StateAuditRunError
+
+    directory = ensure_run_dir(run_id)
+    configure_logging("INFO", log_file=directory / RUN_LOG)
+
+    try:
+        report = run_calibration(config, run_id, primary_run_id=primary_run_id, force=force)
+    except StateAuditRunError as error:
+        typer.secho(f"calibration failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+
+    if report["status"] != "complete":
+        typer.secho(
+            f"run {run_id} did not complete: {report['counts']['failures']} failures were "
+            "recorded and the manifest is marked failed",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    status = report["decision"]["status"]
+    if status == "failed_all_layers":
+        typer.secho(
+            "no ratio passed at either preregistered layer; the study stops under this design. "
+            "Write it up as a negative engineering result rather than widening the grid.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if status == "fallback_required":
+        typer.secho(
+            "no ratio passed at the primary layer; the preregistered layer-20 fallback is now "
+            f"open. Run it with --primary-run-id {run_id}.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+
+
 @state_audit_app.command("verify-run")
 def state_audit_verify_run(
     run_id: str = typer.Option(..., "--run-id", help="State-audit run id to verify."),

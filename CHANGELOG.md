@@ -4,6 +4,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added (2026-07-28, BlueDot slice B3b: the calibration sweep)
+
+* `state_audit/calibrate.py`: the preregistered sweep at one layer. Clean pass, reference norm
+  taken as the median of the 32 clean state norms **before** any intervention runs, one global
+  alpha per frozen ratio, the 81-candidate grid applied to every prompt, then the six frozen
+  conditions per ratio and the smallest passing one. Execution reuses the smoke's
+  `execute_candidate_pass` in full; the two differ only in the candidate shape they ask for and
+  in what they do with the observations afterwards.
+* `csf state-audit calibrate`. It refuses a widened or reordered grid, a third layer, a
+  non-calibration prompt role, a prompt count or no-op tolerance that disagrees with the frozen
+  plan, and a selected-strength config. The layer-20 fallback has its own config and is refused
+  unless `--primary-run-id` names a layer-13 run whose decision record says `fallback_required`,
+  so a layer-13 pass closes the fallback permanently rather than relying on discipline.
+* `StateAuditRunBase`, `CalibrationRunManifest`, and `compute_calibration_run_hash`.
+  `StudyRunManifest` was refactored onto the shared base without changing its hashed payload, so
+  the already-executed smoke run still verifies with an identical manifest hash. A calibration
+  manifest carries the grid, one alpha per ratio, the decision status, and the selection, and its
+  validator re-derives every alpha from the reference norm and refuses a selection that is not on
+  its own grid.
+* The sweep writes a `LayerReferenceNormRecord` carrying all 32 individual norms, the five ratio
+  summaries, and the hashed decision record. `csf state-audit verify-run` handles both manifest
+  shapes, checks one global alpha per grid point rather than one overall, recomputes every alpha
+  from the recorded clean state norms, and refuses a selected ratio that is not the smallest
+  passing one at its layer.
+* `StateAuditRunConfig` gained `candidate_kind` and `norm_ratios`; a config must name exactly one
+  of `norm_ratio` and `norm_ratios`, and a grid must be the frozen five in order.
+  `configs/state_audit/bluedot_calibration_layer13.yaml` and `..._layer20.yaml`.
+* 26 offline tests covering the full fixture sweep, one alpha per ratio from one reference norm,
+  the shared no-op, the decision falling mechanically out of the summaries, every refusal above,
+  the fallback gate in both directions, failure preservation charged to the right grid point, and
+  artifact verification of the decision and summaries.
+
 ### Added (2026-07-28, BlueDot slices B4 and B11: study candidates and the engineering smoke)
 
 * `state_audit/candidates.py`: two explicit builders rather than one with a flag.

@@ -110,7 +110,24 @@ uv run csf state-audit verify-run --run-id bluedot-smoke-layer13
 uv run csf state-audit verify-run --run-id bluedot-smoke-layer13 --compare-run-id <SECOND_RUN_ID>
 ```
 
-`smoke` loads the model; `verify-run` does not. Verification recomputes the run manifest's own
+The preregistered calibration sweep runs through the same command group. It captures the clean
+state for all 32 calibration prompts, takes the median as the reference norm **before** any
+intervention runs, derives one global alpha per frozen ratio, applies 8 directions x 2 signs x 5
+ratios plus one shared no-op to every prompt, and then evaluates the six frozen conditions and
+takes the smallest passing ratio:
+
+```powershell
+uv run csf state-audit calibrate --config configs/state_audit/bluedot_calibration_layer13.yaml --run-id bluedot-calibration-layer13
+uv run csf state-audit verify-run --run-id bluedot-calibration-layer13
+```
+
+Thresholds, ratios, prompts, target, and layers all come from the frozen plan and are not
+adjustable at run time; the command refuses a widened or reordered grid, a third layer, a
+non-calibration prompt role, and a no-op tolerance that differs from the plan's. The layer-20
+fallback lives in its own config and is refused unless `--primary-run-id` names a layer-13 run
+whose decision record says `fallback_required`, so the fallback cannot become a second attempt.
+
+`smoke` and `calibrate` load the model; `verify-run` does not. Verification recomputes the run manifest's own
 content hash, every artifact hash, every observation's target from its own logits, the reference
 norm from the recorded clean state norms, and the single global alpha across every non-no-op
 observation. `--compare-run-id` compares two runs of the same inputs row by row, which is how

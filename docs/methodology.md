@@ -205,6 +205,9 @@ familiar name:
 | `state_audit_observations.jsonl` | state-audit run |
 | `state_audit_failures.jsonl` | state-audit run, when a prompt or candidate fails |
 | `state_audit_run.json` | state-audit run |
+| `state_audit_reference_norm.json` | calibration run |
+| `state_audit_ratio_summaries.json` | calibration run |
+| `state_audit_calibration_decision.json` | calibration run |
 
 Observations are JSONL, not parquet. Every other record in a run is line-oriented JSON, the
 volume is small, and a hashable line-oriented file needs none of the machinery a parquet writer
@@ -324,6 +327,32 @@ value fixed in advance because it is arbitrary. Its reference norm is the median
 over those 8 prompts and is not the calibration reference norm; its effect sizes select no ratio
 and no layer. That fence is enforced rather than stated: `csf calibration summarize` refuses
 observations whose prompt role is not `calibration`.
+
+**How the calibration sweep is executed.** `csf state-audit calibrate` runs the whole grid at one
+layer in the order the preregistration fixes, and the order is what makes the strength
+independent of the outcome:
+
+1. capture the clean state for all 32 calibration prompts;
+2. take the median of those 32 norms as the reference norm, **before any intervention runs**;
+3. set `alpha_r = ratio * reference_norm` for each of the five frozen ratios;
+4. apply 80 signed candidates and one shared no-op to every prompt, 2,624 forwards in total;
+5. evaluate the six conditions per ratio and take the smallest passing one.
+
+Every threshold comes from the frozen plan rather than from the config, and the run refuses a
+grid, layer, prompt role, prompt count, or no-op tolerance that disagrees with it. Execution goes
+through the same `execute_candidate_pass` the smoke uses, so there is one inference path rather
+than two that can drift.
+
+The sweep writes three records beyond the shared ones: a `LayerReferenceNormRecord` carrying all
+32 individual norms, so the reference norm can be recomputed rather than taken on trust; the five
+`CalibrationRatioSummary` records; and the `CalibrationDecisionRecord`. Verification recomputes
+the decision from the summaries beside it and refuses a selected ratio that is not the smallest
+passing one.
+
+**The fallback is gated by an artifact, not by discipline.** Layer 20 has its own config and is
+refused unless `--primary-run-id` names a layer-13 run whose decision record says
+`fallback_required`. A layer-13 pass therefore closes the fallback permanently, which is the
+preregistered rule, enforced where it can be checked.
 
 **All candidates resolved, no selection.** The arm forecasts and observes every candidate, so
 the single-candidate selection step in section 5 is replaced by a no-selection reveal: the salt

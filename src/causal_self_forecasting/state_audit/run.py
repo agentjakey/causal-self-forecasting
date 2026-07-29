@@ -40,7 +40,7 @@ import numpy as np
 import torch
 
 from ..calibration.plan import CalibrationPlanError, load_calibration_plan
-from ..calibration.strength import MEDIAN_METHOD, StrengthError, alpha_for_ratio, reference_norm
+from ..calibration.strength import MEDIAN_METHOD, StrengthError, alpha_table, reference_norm
 from ..config import (
     ConfigError,
     ModelConfig,
@@ -75,8 +75,11 @@ from ..models.scoring import LabelTokenError, resolve_label_token_ids, score_log
 from ..paths import (
     STATE_AUDIT_CANDIDATE_SETS,
     STATE_AUDIT_CLEAN_PASS,
+    STATE_AUDIT_DECISION,
     STATE_AUDIT_FAILURES,
     STATE_AUDIT_OBSERVATIONS,
+    STATE_AUDIT_RATIO_SUMMARIES,
+    STATE_AUDIT_REFERENCE_NORM,
     STATE_AUDIT_RUN_MANIFEST,
     STATE_AUDIT_STATE_REFS,
     STATE_AUDIT_STATES,
@@ -87,6 +90,7 @@ from ..paths import (
 from ..reproducibility import environment_snapshot
 from ..schemas import (
     ArtifactHashRecord,
+    CalibrationRunManifest,
     DirectionFamilyRecord,
     InterventionSpec,
     PromptAssignment,
@@ -97,6 +101,7 @@ from ..schemas import (
     StateAuditCandidateSet,
     StateAuditCleanPassRecord,
     StateAuditObservationRecord,
+    StateAuditRunBase,
     StateAuditRunDiagnostics,
     StudyRunManifest,
     StudyRunRole,
@@ -122,6 +127,7 @@ from .candidates import (
     CandidateBuildError,
     DirectionRef,
     build_state_audit_candidate_set,
+    calibration_grid_templates,
     candidate_analysis_role,
     candidate_mechanism,
     selected_strength_templates,
@@ -174,27 +180,32 @@ class RunInputs:
         rerun under an existing run id compares this rather than the config path, so moving a
         config or renaming a run does not read as a different experiment.
         """
-        return hash_object(
-            {
-                "algorithm_version": RUN_ALGORITHM_VERSION,
-                "candidate_algorithm_version": CANDIDATE_ALGORITHM_VERSION,
-                "config_hash": self.config_hash,
-                "study_id": self.config.study_id,
-                "run_role": self.config.run_role.value,
-                "prompt_role": self.config.prompt_role.value,
-                "model_id": self.model_config.model_id,
-                "model_revision": self.model_config.revision,
-                "prompt_manifest_hash": self.manifest.manifest_hash,
-                "direction_family_hash": self.family.family_hash,
-                "calibration_plan_hash": self.plan_hash,
-                "layer": self.config.layer,
-                "capture_position": self.config.capture_position,
-                "norm_ratio": float(self.config.norm_ratio),
-                "master_seed": self.config.master_seed,
-                "prompt_count": len(self.assignments),
-                "direction_count": len(self.directions),
-            }
-        )
+        material: dict[str, Any] = {
+            "algorithm_version": RUN_ALGORITHM_VERSION,
+            "candidate_algorithm_version": CANDIDATE_ALGORITHM_VERSION,
+            "config_hash": self.config_hash,
+            "study_id": self.config.study_id,
+            "run_role": self.config.run_role.value,
+            "prompt_role": self.config.prompt_role.value,
+            "model_id": self.model_config.model_id,
+            "model_revision": self.model_config.revision,
+            "prompt_manifest_hash": self.manifest.manifest_hash,
+            "direction_family_hash": self.family.family_hash,
+            "calibration_plan_hash": self.plan_hash,
+            "layer": self.config.layer,
+            "capture_position": self.config.capture_position,
+            "master_seed": self.config.master_seed,
+            "prompt_count": len(self.assignments),
+            "direction_count": len(self.directions),
+        }
+        # A grid run names its ratios and a selected-strength run names its one ratio. Only the
+        # key that applies is included, so adding grid support did not change the fingerprint of
+        # a selected-strength run that had already been executed and recorded.
+        if self.config.norm_ratios is not None:
+            material["norm_ratios"] = [float(ratio) for ratio in self.config.norm_ratios]
+        else:
+            material["norm_ratio"] = float(self.config.ratio_grid[0])
+        return hash_object(material)
 
 
 def load_run_config(config_path: str | Path) -> StateAuditRunConfig:
@@ -362,10 +373,17 @@ def check_smoke_parameters(config: StateAuditRunConfig) -> None:
         raise StateAuditRunError(
             f"the smoke run is fixed at layer {SMOKE_LAYER}; the config names layer {config.layer}"
         )
-    if float(config.norm_ratio) != SMOKE_NORM_RATIO:
+    if config.candidate_kind is not StateAuditCandidateKind.SELECTED_STRENGTH:
+        raise StateAuditRunError(
+            f"the smoke run applies one selected strength; the config declares "
+            f"{config.candidate_kind.value!r} candidates. The five-ratio grid belongs to "
+            "calibration."
+        )
+    grid = config.ratio_grid
+    if grid != (SMOKE_NORM_RATIO,):
         raise StateAuditRunError(
             f"the smoke run is fixed at the preregistered arbitrary ratio {SMOKE_NORM_RATIO}; the "
-            f"config names {config.norm_ratio}. The smoke ratio was chosen in advance so that it "
+            f"config names {list(grid)}. The smoke ratio was chosen in advance so that it "
             "could not be chosen later from the effect distribution."
         )
 
@@ -809,15 +827,36 @@ def build_diagnostics(
 # ---------------------------------------------------------------------------
 
 
-def load_study_run_manifest(run_id: str) -> StudyRunManifest:
+def load_state_audit_run_manifest(run_id: str) -> StateAuditRunBase:
+    """Load a run manifest as whichever of the two shapes it actually is.
+
+    A calibration run has a ratio grid and a decision; every other run has one ratio and one
+    alpha. Dispatching on the field rather than on the file name means a manifest is parsed by
+    the record type whose validator can actually check it.
+    """
     path = run_dir(run_id) / STATE_AUDIT_RUN_MANIFEST
     if not path.exists():
         raise StateAuditRunError(f"no state-audit run manifest at {path}")
+    raw = read_json(path)
+    if not isinstance(raw, dict):
+        raise StateAuditRunError(f"{path} is not a state-audit run manifest object")
+    record_type = CalibrationRunManifest if "norm_ratios" in raw else StudyRunManifest
     try:
-        return StudyRunManifest.model_validate(read_json(path))
+        return record_type.model_validate(raw)
     except Exception as error:
         message = f"{path} is not a valid state-audit run manifest: {error}"
         raise StateAuditRunError(message) from error
+
+
+def load_study_run_manifest(run_id: str) -> StudyRunManifest:
+    """Load a selected-strength run manifest, refusing a calibration one."""
+    manifest = load_state_audit_run_manifest(run_id)
+    if not isinstance(manifest, StudyRunManifest):
+        raise StateAuditRunError(
+            f"run {run_id!r} is a calibration run, which carries a ratio grid rather than one "
+            "selected strength"
+        )
+    return manifest
 
 
 def guard_existing_run(run_id: str, fingerprint: str, force: bool) -> None:
@@ -831,7 +870,7 @@ def guard_existing_run(run_id: str, fingerprint: str, force: bool) -> None:
     directory = run_dir(run_id)
     manifest_path = directory / STATE_AUDIT_RUN_MANIFEST
     if manifest_path.exists():
-        existing = load_study_run_manifest(run_id)
+        existing = load_state_audit_run_manifest(run_id)
         same = existing.input_fingerprint == fingerprint
         if existing.status == "complete" and not force:
             raise StateAuditRunError(
@@ -857,6 +896,9 @@ def guard_existing_run(run_id: str, fingerprint: str, force: bool) -> None:
             STATE_AUDIT_CANDIDATE_SETS,
             STATE_AUDIT_CLEAN_PASS,
             STATE_AUDIT_STATES,
+            STATE_AUDIT_REFERENCE_NORM,
+            STATE_AUDIT_RATIO_SUMMARIES,
+            STATE_AUDIT_DECISION,
         )
         if (directory / name).exists()
     ]
@@ -873,14 +915,51 @@ def guard_existing_run(run_id: str, fingerprint: str, force: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
-def execute_state_audit_run(
+@dataclass(frozen=True)
+class ExecutedRun:
+    """Everything one execution produced, before it is described by a manifest.
+
+    Returned by the shared core so that a selected-strength run and a calibration grid run can
+    differ in how they describe their strengths without differing in how they run the model.
+    """
+
+    inputs: RunInputs
+    run_id: str
+    directory: Path
+    model: LoadedModel
+    started_at: datetime
+    clean_passes: list[CleanPass]
+    clean_records: list[StateAuditCleanPassRecord]
+    candidate_sets: list[StateAuditCandidateSet]
+    observations: list[StateAuditObservationRecord]
+    failures: list[dict[str, Any]]
+    forwards: int
+    reference_norm: float
+    ratio_alphas: list[tuple[float, float]]
+    states_hash: str
+    diagnostics: StateAuditRunDiagnostics
+
+
+def execute_candidate_pass(
     config_path: str | Path,
     run_id: str,
+    kind: StateAuditCandidateKind,
     force: bool = False,
-) -> dict[str, Any]:
-    """Execute one state-dependence run end to end and write its artifacts."""
+) -> ExecutedRun:
+    """Run the clean pass, freeze the strengths, and apply every candidate.
+
+    The one execution path. A calibration grid and a selected strength differ only in the
+    templates built at step three; the forwards, the capture, the scoring, the target, the
+    failure handling, and the artifacts are identical, so there is no second inference system to
+    keep in agreement with this one.
+    """
     inputs = resolve_run_inputs(config_path)
     config = inputs.config
+    if config.candidate_kind is not kind:
+        raise StateAuditRunError(
+            f"this command runs {kind.value} candidate sets; the config declares "
+            f"{config.candidate_kind.value}"
+        )
     fingerprint = inputs.input_fingerprint
     guard_existing_run(run_id, fingerprint, force)
 
@@ -892,6 +971,9 @@ def execute_state_audit_run(
         STATE_AUDIT_CLEAN_PASS,
         STATE_AUDIT_STATE_REFS,
         STATE_AUDIT_RUN_MANIFEST,
+        STATE_AUDIT_REFERENCE_NORM,
+        STATE_AUDIT_RATIO_SUMMARIES,
+        STATE_AUDIT_DECISION,
     ):
         (directory / name).unlink(missing_ok=True)
 
@@ -913,12 +995,14 @@ def execute_state_audit_run(
     state_refs = shard.close()
     states_hash = hash_file(directory / STATE_AUDIT_STATES)
 
-    # One global alpha, from the median clean state norm across this run's prompts. Never
-    # ratio * ||h_prompt||: a per-prompt strength would publish the prompt's state norm.
+    # One global alpha per ratio, from the median clean state norm across this run's prompts.
+    # Never ratio * ||h_prompt||: a per-prompt strength would publish the prompt's state norm.
+    # The reference norm is computed once, before any intervention runs, so it cannot depend on
+    # an effect.
     norms_by_prompt = {clean.assignment.variant_id: clean.state_norm for clean in clean_passes}
     try:
         median_norm = reference_norm(norms_by_prompt, sorted(norms_by_prompt))
-        global_alpha = alpha_for_ratio(median_norm, float(config.norm_ratio))
+        ratio_alphas = alpha_table(median_norm, config.ratio_grid)
     except StrengthError as error:
         raise StateAuditRunError(str(error)) from error
 
@@ -962,6 +1046,12 @@ def execute_state_audit_run(
     observations: list[StateAuditObservationRecord] = []
     reconstruction_errors: list[float] = []
 
+    if kind is StateAuditCandidateKind.CALIBRATION_GRID:
+        templates = calibration_grid_templates(inputs.directions, ratio_alphas)
+    else:
+        one_ratio, one_alpha = ratio_alphas[0]
+        templates = selected_strength_templates(inputs.directions, one_ratio, one_alpha)
+
     for clean in clean_passes:
         try:
             candidate_set = build_state_audit_candidate_set(
@@ -970,15 +1060,13 @@ def execute_state_audit_run(
                 variant_id=clean.assignment.variant_id,
                 group_id=clean.assignment.group_id,
                 prompt_role=config.prompt_role,
-                kind=StateAuditCandidateKind.SELECTED_STRENGTH,
+                kind=kind,
                 layer=config.layer,
                 position_index=config.capture_position,
                 direction_family_id=inputs.family.family_id,
                 direction_family_hash=inputs.family.family_hash,
                 direction_count=len(inputs.directions),
-                templates=selected_strength_templates(
-                    inputs.directions, float(config.norm_ratio), global_alpha
-                ),
+                templates=templates,
                 master_seed=config.master_seed,
             )
         except (CandidateBuildError, ValueError) as error:
@@ -989,7 +1077,7 @@ def execute_state_audit_run(
                 error_type=type(error).__name__,
                 message=str(error),
                 layer=config.layer,
-                norm_ratio=float(config.norm_ratio),
+                norm_ratio=None,
             )
             failures.append(failure)
             append_jsonl(directory / STATE_AUDIT_FAILURES, failure)
@@ -1042,25 +1130,48 @@ def execute_state_audit_run(
             f"were recorded in {STATE_AUDIT_FAILURES}"
         )
 
-    manifest = _build_run_manifest(
+    diagnostics = build_diagnostics(
+        observations=observations,
+        clean_passes=clean_passes,
+        reconstruction_errors=reconstruction_errors,
+        capture_hooks_fired=len(clean_passes),
+        state_dim=int(clean_passes[0].state.shape[0]),
+        effect_threshold=config.effect_report_threshold,
+    )
+
+    return ExecutedRun(
         inputs=inputs,
         run_id=run_id,
+        directory=directory,
         model=model,
+        started_at=started_at,
         clean_passes=clean_passes,
         clean_records=clean_records,
-        observations=observations,
-        reconstruction_errors=reconstruction_errors,
         candidate_sets=candidate_sets,
+        observations=observations,
         failures=failures,
         forwards=forwards,
-        median_norm=median_norm,
-        global_alpha=global_alpha,
+        reference_norm=median_norm,
+        ratio_alphas=ratio_alphas,
         states_hash=states_hash,
-        directory=directory,
-        fingerprint=fingerprint,
-        started_at=started_at,
+        diagnostics=diagnostics,
     )
-    atomic_write_json(directory / STATE_AUDIT_RUN_MANIFEST, manifest.model_dump(mode="json"))
+
+
+def execute_state_audit_run(
+    config_path: str | Path,
+    run_id: str,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Execute one selected-strength run end to end and write its artifacts."""
+    executed = execute_candidate_pass(
+        config_path, run_id, StateAuditCandidateKind.SELECTED_STRENGTH, force=force
+    )
+    ratio, alpha = executed.ratio_alphas[0]
+    manifest = build_selected_strength_manifest(executed, ratio, alpha)
+    atomic_write_json(
+        executed.directory / STATE_AUDIT_RUN_MANIFEST, manifest.model_dump(mode="json")
+    )
 
     info(
         "executed state-audit run",
@@ -1068,11 +1179,11 @@ def execute_state_audit_run(
         run_role=manifest.run_role.value,
         status=manifest.status,
         prompts=manifest.observed_prompt_count,
-        observations=len(observations),
-        failures=len(failures),
-        forwards=forwards,
+        observations=len(executed.observations),
+        failures=len(executed.failures),
+        forwards=executed.forwards,
     )
-    return run_report(manifest, directory)
+    return run_report(manifest, executed.directory)
 
 
 def _load_direction_vectors(
@@ -1103,36 +1214,27 @@ def _load_direction_vectors(
     return vectors
 
 
-def _build_run_manifest(
-    inputs: RunInputs,
-    run_id: str,
-    model: LoadedModel,
-    clean_passes: Sequence[CleanPass],
-    clean_records: Sequence[StateAuditCleanPassRecord],
-    observations: Sequence[StateAuditObservationRecord],
-    reconstruction_errors: Sequence[float],
-    candidate_sets: Sequence[StateAuditCandidateSet],
-    failures: Sequence[dict[str, Any]],
-    forwards: int,
-    median_norm: float,
-    global_alpha: float,
-    states_hash: str,
-    directory: Path,
-    fingerprint: str,
-    started_at: datetime,
-) -> StudyRunManifest:
-    config = inputs.config
-    signed = [record for record in observations if not record.is_noop]
-    noops = [record for record in observations if record.is_noop]
+@dataclass(frozen=True)
+class ManifestCommon:
+    """The manifest payload every state-audit run shares, plus its non-hashed provenance."""
 
-    diagnostics = build_diagnostics(
-        observations=observations,
-        clean_passes=clean_passes,
-        reconstruction_errors=reconstruction_errors,
-        capture_hooks_fired=len(clean_passes),
-        state_dim=int(clean_passes[0].state.shape[0]),
-        effect_threshold=config.effect_report_threshold,
-    )
+    payload: dict[str, Any]
+    provenance: list[ArtifactHashRecord]
+    environment: dict[str, Any]
+    config_path: str
+
+
+def state_audit_run_common(executed: ExecutedRun, reference_norm_source: str) -> ManifestCommon:
+    """Build the shared half of a run manifest.
+
+    The counts here are the ones the record's validator re-derives, so a run that came up short
+    cannot be described as complete regardless of which manifest type wraps this payload.
+    """
+    inputs = executed.inputs
+    config = inputs.config
+    directory = executed.directory
+    signed = [record for record in executed.observations if not record.is_noop]
+    noops = [record for record in executed.observations if record.is_noop]
 
     provenance: list[ArtifactHashRecord] = []
     for name, kind in (
@@ -1142,6 +1244,9 @@ def _build_run_manifest(
         (STATE_AUDIT_CLEAN_PASS, "state_audit_clean_pass"),
         (STATE_AUDIT_STATE_REFS, "state_audit_state_refs"),
         (STATE_AUDIT_STATES, "state_audit_states"),
+        (STATE_AUDIT_REFERENCE_NORM, "state_audit_reference_norm"),
+        (STATE_AUDIT_RATIO_SUMMARIES, "state_audit_ratio_summaries"),
+        (STATE_AUDIT_DECISION, "state_audit_calibration_decision"),
     ):
         path = directory / name
         if path.exists():
@@ -1155,20 +1260,22 @@ def _build_run_manifest(
             )
 
     failures_path = directory / STATE_AUDIT_FAILURES
-    correct = sum(1 for record in clean_records if record.clean_correct)
-    scored = len(clean_records)
-    candidates_per_prompt = config.candidates_per_prompt
+    correct = sum(1 for record in executed.clean_records if record.clean_correct)
+    scored = len(executed.clean_records)
+    expected_signed = (
+        config.expected_prompt_count * config.expected_signed_directions * len(config.ratio_grid)
+    )
 
-    common: dict[str, Any] = {
-        "schema_version": StudyRunManifest.model_fields["schema_version"].default,
+    payload: dict[str, Any] = {
+        "schema_version": StateAuditRunBase.model_fields["schema_version"].default,
         "study_id": config.study_id,
-        "run_id": run_id,
+        "run_id": executed.run_id,
         "run_role": config.run_role.value,
-        "model_id": model.spec.model_id,
-        "model_revision": model.spec.revision,
-        "tokenizer_revision": model.spec.revision,
-        "dtype": model.spec.dtype,
-        "device": model.spec.device,
+        "model_id": executed.model.spec.model_id,
+        "model_revision": executed.model.spec.revision,
+        "tokenizer_revision": executed.model.spec.revision,
+        "dtype": executed.model.spec.dtype,
+        "device": executed.model.spec.device,
         "target_name": TARGET_NAME,
         "prompt_manifest_id": inputs.manifest.manifest_id,
         "prompt_manifest_hash": inputs.manifest.manifest_hash,
@@ -1179,64 +1286,78 @@ def _build_run_manifest(
         "calibration_plan_hash": inputs.plan_hash,
         "layer": config.layer,
         "capture_position": config.capture_position,
-        "norm_ratio": float(config.norm_ratio),
-        "reference_norm": median_norm,
-        "global_alpha": global_alpha,
-        "reference_norm_source": (
-            f"median clean residual-stream norm over the {len(clean_passes)} "
-            f"{config.prompt_role.value} prompts at layer {config.layer}; this is the run's own "
-            "engineering reference norm and is not the calibration reference norm"
-        ),
+        "reference_norm": executed.reference_norm,
+        "reference_norm_source": reference_norm_source,
         "expected_prompt_count": config.expected_prompt_count,
-        "expected_candidates_per_prompt": candidates_per_prompt,
-        "expected_non_noop_observations": (
-            config.expected_prompt_count * config.expected_signed_directions
-        ),
+        "expected_candidates_per_prompt": config.candidates_per_prompt,
+        "expected_non_noop_observations": expected_signed,
         "expected_noop_observations": config.expected_prompt_count,
         "expected_forward_count": config.expected_forward_count,
-        "observed_prompt_count": len(clean_passes),
-        "observed_state_count": len(clean_records),
+        "observed_prompt_count": len(executed.clean_passes),
+        "observed_state_count": len(executed.clean_records),
         "observed_non_noop_observations": len(signed),
         "observed_noop_observations": len(noops),
-        "observed_forward_count": forwards,
-        "failure_count": len(failures),
+        "observed_forward_count": executed.forwards,
+        "failure_count": len(executed.failures),
         "clean_scored_count": scored,
         "clean_correct_count": correct,
         "clean_accuracy_descriptive": (correct / scored) if scored else None,
-        "diagnostics": diagnostics.model_dump(mode="json"),
+        "diagnostics": executed.diagnostics.model_dump(mode="json"),
         "observations_hash": hash_file(directory / STATE_AUDIT_OBSERVATIONS),
         "failures_hash": hash_file(failures_path) if failures_path.exists() else None,
-        "states_hash": states_hash,
+        "states_hash": executed.states_hash,
         "candidate_sets_hash": hash_file(directory / STATE_AUDIT_CANDIDATE_SETS),
         "clean_pass_hash": hash_file(directory / STATE_AUDIT_CLEAN_PASS),
-        "input_fingerprint": fingerprint,
+        "input_fingerprint": inputs.input_fingerprint,
         "config_hash": inputs.config_hash,
     }
 
     complete = (
-        not failures
-        and len(clean_passes) == config.expected_prompt_count
-        and len(clean_records) == config.expected_prompt_count
-        and len(signed) == config.expected_prompt_count * config.expected_signed_directions
+        not executed.failures
+        and len(executed.clean_passes) == config.expected_prompt_count
+        and len(executed.clean_records) == config.expected_prompt_count
+        and len(signed) == expected_signed
         and len(noops) == config.expected_prompt_count
-        and forwards == config.expected_forward_count
+        and executed.forwards == config.expected_forward_count
     )
-    common["status"] = "complete" if complete else "failed"
+    payload["status"] = "complete" if complete else "failed"
 
-    environment = environment_snapshot()
-    git = environment.get("git") or {}
+    return ManifestCommon(
+        payload=payload,
+        provenance=provenance,
+        environment=environment_snapshot(),
+        config_path=_repo_relative(inputs.config_path),
+    )
+
+
+def build_selected_strength_manifest(
+    executed: ExecutedRun, norm_ratio: float, global_alpha: float
+) -> StudyRunManifest:
+    config = executed.inputs.config
+    common = state_audit_run_common(
+        executed,
+        reference_norm_source=(
+            f"median clean residual-stream norm over the {len(executed.clean_passes)} "
+            f"{config.prompt_role.value} prompts at layer {config.layer}; this is the run's own "
+            "engineering reference norm and is not the calibration reference norm"
+        ),
+    )
+    payload = dict(common.payload)
+    payload["norm_ratio"] = float(norm_ratio)
+    payload["global_alpha"] = float(global_alpha)
+    git = common.environment.get("git") or {}
 
     return StudyRunManifest(
-        **{key: value for key, value in common.items() if key != "diagnostics"},
-        diagnostics=diagnostics,
-        manifest_hash=compute_study_run_hash(common),
-        config_path=_repo_relative(inputs.config_path),
+        **{key: value for key, value in payload.items() if key != "diagnostics"},
+        diagnostics=executed.diagnostics,
+        manifest_hash=compute_study_run_hash(payload),
+        config_path=common.config_path,
         code_commit=git.get("commit"),
         code_branch=git.get("branch"),
         code_dirty=git.get("dirty"),
-        environment=environment,
-        provenance=provenance,
-        started_at=started_at,
+        environment=common.environment,
+        provenance=common.provenance,
+        started_at=executed.started_at,
         completed_at=datetime.now(UTC),
         notes=(
             "State-dependence execution run. Every candidate was applied to every prompt and "
@@ -1331,19 +1452,25 @@ __all__ = [
     "SMOKE_NORM_RATIO",
     "AppliedCandidate",
     "CleanPass",
+    "ExecutedRun",
+    "ManifestCommon",
     "RunInputs",
     "StateAuditRunError",
     "apply_candidate",
     "build_diagnostics",
+    "build_selected_strength_manifest",
     "check_smoke_parameters",
+    "execute_candidate_pass",
     "execute_state_audit_run",
     "guard_existing_run",
     "load_run_config",
+    "load_state_audit_run_manifest",
     "load_study_run_manifest",
     "manifest_content_bytes",
     "resolve_run_inputs",
     "run_clean_pass",
     "run_report",
     "run_smoke",
+    "state_audit_run_common",
     "trial_id_for",
 ]

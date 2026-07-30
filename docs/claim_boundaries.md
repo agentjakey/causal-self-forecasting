@@ -39,8 +39,31 @@ Its effect sizes describe how far a fixed vector moves a logit margin at a given
 is a fact about the intervention, not about the model's reasoning.
 
 Clean accuracy from either run is descriptive over a handful of items and is not a capability
-measurement. No forecaster has been fitted, no forecast has been committed, and no method has been
-compared to another.
+measurement.
+
+As of 2026-07-29 the three ridges have been fitted on the 96 training prompts and 512 final-test
+forecasts have been committed and sealed. **No final-test intervention has been applied, so no
+method has been scored and no comparison exists.** The resolution and analysis code is implemented
+and tested but has not been executed.
+
+Two things about the eventual result are fixed now, before it exists, and cannot be renegotiated
+afterwards:
+
+* **A crossing interval is a null result.** A comparison supports its hypothesis only if the 95
+  percent paired bootstrap interval over the 32 prompt groups excludes zero in the hypothesized
+  direction. An interval crossing zero must be reported as no detected difference, and never as a
+  trend, a signal, a suggestion, or a direction of travel. The code enforces this: `PairedComparison`
+  refuses to be constructed with a `supported` flag that does not follow from its own interval.
+* **A null result is not an absence claim.** With 32 final-test prompts the arm is not powered to
+  show that the information is absent. A null would mean this readout at this power did not find
+  it, which is a different and much weaker statement, and the write-up must make that difference
+  explicit.
+
+One piece of context that belongs here rather than in a footnote later: the training-fold
+cross-validated errors already favour the visible-information ridge over the state-conditioned one.
+Those are training-fold diagnostics and not the test, but they mean a negative result on H-BD1 is
+the more likely outcome, and section 12 of the preregistration already records that such an outcome
+counts **against** a hidden-state advantage rather than being uninformative.
 
 None of that is a CSF-Bench result and none of it can become one: the direction used was
 synthetic and unvalidated, and single-item accuracy is a scoring smoke check. The distinction is

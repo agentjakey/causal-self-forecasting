@@ -2639,6 +2639,413 @@ class CleanPassRunManifest(Versioned):
         return self
 
 
+FINAL_TEST_RESOLUTION_HASHED_FIELDS = (
+    "schema_version",
+    "study_id",
+    "run_id",
+    "run_role",
+    "model_id",
+    "model_revision",
+    "tokenizer_revision",
+    "dtype",
+    "device",
+    "target_name",
+    "prompt_manifest_hash",
+    "direction_family_hash",
+    "calibration_plan_hash",
+    "projection_hash",
+    "clean_run_manifest_hash",
+    "commitment_summary_hash",
+    "pairing_hash",
+    "layer",
+    "capture_position",
+    "norm_ratio",
+    "global_alpha",
+    "reference_norm",
+    "expected_prompt_count",
+    "expected_candidates_per_prompt",
+    "expected_signed_observations",
+    "expected_noop_observations",
+    "expected_intervened_forwards",
+    "observed_prompt_count",
+    "observed_signed_observations",
+    "observed_noop_observations",
+    "observed_intervened_forwards",
+    "clean_forwards",
+    "failure_count",
+    "max_abs_noop_target",
+    "max_abs_noop_delta_norm",
+    "max_intervention_reconstruction_error",
+    "flip_count",
+    "observations_hash",
+    "failures_hash",
+    "reveals_hash",
+    "commitments_checked",
+    "commitments_verified",
+    "reveal_count",
+    "config_hash",
+    "code_commit",
+    "code_dirty",
+    "status",
+)
+
+
+def final_test_resolution_payload(dumped: dict[str, Any]) -> dict[str, Any]:
+    missing = [name for name in FINAL_TEST_RESOLUTION_HASHED_FIELDS if name not in dumped]
+    if missing:
+        raise ValueError(f"final-test resolution dump is missing hashed fields: {missing}")
+    return {name: dumped[name] for name in FINAL_TEST_RESOLUTION_HASHED_FIELDS}
+
+
+def compute_final_test_resolution_hash(dumped: dict[str, Any]) -> str:
+    return hash_object(final_test_resolution_payload(dumped))
+
+
+class FinalTestResolutionManifest(Versioned):
+    """The record of the irreversible step: final-test interventions applied and revealed.
+
+    Written beside the clean-stage manifest rather than over it, because the clean stage is the
+    evidence that the states and logits existed before any outcome did, and overwriting it would
+    destroy exactly the thing the protocol rests on.
+
+    `code_commit` and `code_dirty` are inside the hashed payload. The resolution is the one step
+    that cannot be undone, so which code performed it is part of what the record *is*, not
+    provenance metadata that happens to travel alongside.
+    """
+
+    study_id: Identifier
+    run_id: Identifier
+    run_role: StudyRunRole
+
+    model_id: str
+    model_revision: str
+    tokenizer_revision: str
+    dtype: str
+    device: str
+
+    target_name: Literal["delta_clean_top_margin"] = "delta_clean_top_margin"
+    prompt_manifest_hash: HashString
+    direction_family_hash: HashString
+    calibration_plan_hash: HashString
+    projection_hash: HashString
+    clean_run_manifest_hash: HashString
+    commitment_summary_hash: HashString
+    pairing_hash: HashString
+
+    layer: int = Field(ge=0)
+    capture_position: int
+    norm_ratio: float = Field(gt=0.0)
+    global_alpha: float = Field(gt=0.0)
+    reference_norm: float = Field(gt=0.0)
+
+    expected_prompt_count: int = Field(gt=0)
+    expected_candidates_per_prompt: int = Field(gt=0)
+    expected_signed_observations: int = Field(gt=0)
+    expected_noop_observations: int = Field(gt=0)
+    expected_intervened_forwards: int = Field(gt=0)
+
+    observed_prompt_count: int = Field(ge=0)
+    observed_signed_observations: int = Field(ge=0)
+    observed_noop_observations: int = Field(ge=0)
+    observed_intervened_forwards: int = Field(ge=0)
+    # Zero by construction: resolution reuses the clean logits and states the clean stage already
+    # captured. A nonzero value would mean the delta was measured against a different clean run
+    # than the forecasts were made against.
+    clean_forwards: Literal[0] = 0
+    failure_count: int = Field(ge=0)
+
+    max_abs_noop_target: float = Field(ge=0.0)
+    max_abs_noop_delta_norm: float = Field(ge=0.0)
+    max_intervention_reconstruction_error: float = Field(ge=0.0)
+    flip_count: int = Field(ge=0)
+
+    observations_hash: HashString
+    failures_hash: HashString | None = None
+    reveals_hash: HashString
+    commitments_checked: int = Field(ge=0)
+    commitments_verified: bool
+    reveal_count: int = Field(ge=0)
+
+    config_hash: HashString
+    code_commit: str
+    code_dirty: bool
+    status: Literal["complete", "failed"]
+    manifest_hash: HashString
+
+    config_path: str
+    code_branch: str | None = None
+    environment: dict[str, Any] = Field(default_factory=dict)
+    provenance: list[ArtifactHashRecord] = Field(default_factory=list)
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def _check_resolution(self) -> FinalTestResolutionManifest:
+        if self.run_role is not StudyRunRole.FINAL_TEST_RESOLVED:
+            raise ValueError(
+                f"a resolution manifest is the resolved final-test stage; got run role "
+                f"{self.run_role.value!r}"
+            )
+        candidates = self.expected_candidates_per_prompt
+        planned = [
+            (
+                "expected_signed_observations",
+                self.expected_signed_observations,
+                self.expected_prompt_count * (candidates - 1),
+            ),
+            (
+                "expected_noop_observations",
+                self.expected_noop_observations,
+                self.expected_prompt_count,
+            ),
+            (
+                "expected_intervened_forwards",
+                self.expected_intervened_forwards,
+                self.expected_prompt_count * candidates,
+            ),
+        ]
+        wrong = [
+            f"{name} is {actual}, expected {expected}"
+            for name, actual, expected in planned
+            if actual != expected
+        ]
+        if wrong:
+            raise ValueError(f"the planned resolution arithmetic does not add up: {wrong}")
+
+        expected_alpha = self.norm_ratio * self.reference_norm
+        if abs(self.global_alpha - expected_alpha) > 1e-9 * max(1.0, abs(expected_alpha)):
+            raise ValueError(
+                f"global_alpha {self.global_alpha} is not norm_ratio * reference_norm "
+                f"({expected_alpha})"
+            )
+
+        complete = (
+            self.failure_count == 0
+            and self.observed_prompt_count == self.expected_prompt_count
+            and self.observed_signed_observations == self.expected_signed_observations
+            and self.observed_noop_observations == self.expected_noop_observations
+            and self.observed_intervened_forwards == self.expected_intervened_forwards
+            and self.commitments_verified
+        )
+        if self.status == "complete" and not complete:
+            raise ValueError(
+                f"run {self.run_id} calls itself complete but {self.failure_count} failures were "
+                "recorded, or a count is short, or the commitments did not verify"
+            )
+        if self.status == "failed" and complete:
+            raise ValueError("a successful resolution must not be filed as a failure")
+
+        recomputed = compute_final_test_resolution_hash(self.model_dump(mode="json"))
+        if recomputed != self.manifest_hash:
+            raise ValueError(
+                f"manifest_hash {self.manifest_hash} does not match the resolution contents "
+                f"({recomputed}); the file has been edited since it was written"
+            )
+        return self
+
+
+class MethodConditionSummary(Base):
+    """Every metric for one (method, state condition, condition index), prompt-aggregated.
+
+    `mae` and `rmse` are means over the 32 prompt-level values, never over the 512 pair-level
+    ones. The Brier score is present only when the realized flip count reaches the preregistered
+    floor; below it the field is null and `brier_omitted_reason` says why, because a Brier score
+    over four flips is a number that would be quoted and should not be.
+    """
+
+    method_id: Identifier
+    state_condition: StateCondition
+    condition_index: int = Field(ge=0)
+
+    prompt_count: int = Field(gt=0)
+    signed_pair_count: int = Field(gt=0)
+    noop_pair_count: int = Field(ge=0)
+
+    mae: float = Field(ge=0.0)
+    rmse: float = Field(ge=0.0)
+    sign_accuracy: float = Field(ge=0.0, le=1.0)
+    spearman: float | None = None
+    top_effect_accuracy: float = Field(ge=0.0, le=1.0)
+    interval_coverage: float = Field(ge=0.0, le=1.0)
+
+    observed_flip_count: int = Field(ge=0)
+    brier_score: float | None = None
+    brier_min_flips: int = Field(gt=0)
+    brier_omitted_reason: str | None = None
+
+    max_abs_noop_error: float = Field(ge=0.0)
+    mean_abs_noop_error: float = Field(ge=0.0)
+
+    @model_validator(mode="after")
+    def _check_brier(self) -> MethodConditionSummary:
+        reported = self.observed_flip_count >= self.brier_min_flips
+        if reported and self.brier_score is None:
+            raise ValueError(
+                f"{self.observed_flip_count} flips reaches the floor of {self.brier_min_flips}, so "
+                "the Brier score must be reported"
+            )
+        if not reported:
+            if self.brier_score is not None:
+                raise ValueError(
+                    f"{self.observed_flip_count} flips is below the floor of "
+                    f"{self.brier_min_flips}; the Brier score must be omitted, not reported"
+                )
+            if not self.brier_omitted_reason:
+                raise ValueError("an omitted Brier score must say why it was omitted")
+        return self
+
+
+class PairedComparison(Base):
+    """One preregistered paired difference, with the decision rule already applied.
+
+    `supported` is derived from the interval, not asserted. An interval crossing zero is recorded
+    as no detected difference and must never be described as a trend.
+    """
+
+    name: str
+    hypothesis: str
+    left: str
+    right: str
+    hypothesized_direction: Literal["positive", "negative"]
+
+    point_estimate: float
+    ci_low: float
+    ci_high: float
+    confidence: float = Field(gt=0.0, lt=1.0)
+    resamples: int = Field(ge=0)
+    seed: int
+    prompt_count: int = Field(gt=0)
+    group_count: int = Field(gt=0)
+
+    excludes_zero: bool
+    supported: bool
+    interpretation: str
+
+    @model_validator(mode="after")
+    def _check_decision(self) -> PairedComparison:
+        if self.ci_low > self.ci_high:
+            raise ValueError(f"ci_low {self.ci_low} exceeds ci_high {self.ci_high}")
+        excludes = (self.ci_low > 0.0) or (self.ci_high < 0.0)
+        if self.excludes_zero != excludes:
+            raise ValueError(
+                f"excludes_zero is {self.excludes_zero} but the interval "
+                f"[{self.ci_low}, {self.ci_high}] says {excludes}"
+            )
+        expected_support = excludes and (
+            self.point_estimate > 0.0
+            if self.hypothesized_direction == "positive"
+            else self.point_estimate < 0.0
+        )
+        if self.supported != expected_support:
+            raise ValueError(
+                "supported must follow from the interval and the hypothesized direction; the "
+                "decision rule is fixed in advance and is not a judgement call"
+            )
+        return self
+
+
+FINAL_TEST_ANALYSIS_HASHED_FIELDS = (
+    "schema_version",
+    "analysis_id",
+    "study_id",
+    "final_test_run_id",
+    "training_run_id",
+    "target_name",
+    "layer",
+    "norm_ratio",
+    "global_alpha",
+    "prompt_count",
+    "group_count",
+    "aggregation",
+    "decision_rule",
+    "bootstrap_resamples",
+    "bootstrap_seed",
+    "method_summaries",
+    "primary_comparisons",
+    "permutation_band",
+    "resolution_manifest_hash",
+    "forecasts_hash",
+    "observations_hash",
+    "commitments_verified",
+    "scientific_forecast_evaluation",
+)
+
+
+def final_test_analysis_payload(dumped: dict[str, Any]) -> dict[str, Any]:
+    missing = [name for name in FINAL_TEST_ANALYSIS_HASHED_FIELDS if name not in dumped]
+    if missing:
+        raise ValueError(f"final-test analysis dump is missing hashed fields: {missing}")
+    return {name: dumped[name] for name in FINAL_TEST_ANALYSIS_HASHED_FIELDS}
+
+
+def compute_final_test_analysis_hash(dumped: dict[str, Any]) -> str:
+    return hash_object(final_test_analysis_payload(dumped))
+
+
+class FinalTestAnalysisRecord(Versioned):
+    """The analysis, run once, from sealed forecasts and verified outcomes.
+
+    This is the one record in the repository that may carry a scientific result, and it says so
+    with a real boolean rather than a `Literal[False]`. `scientific_forecast_evaluation` is true
+    only when the commitments verified and the resolution completed; a run that did not verify is
+    reported as a run that did not verify.
+    """
+
+    analysis_id: Identifier
+    study_id: Identifier
+    final_test_run_id: Identifier
+    training_run_id: Identifier
+
+    target_name: Literal["delta_clean_top_margin"] = "delta_clean_top_margin"
+    layer: int = Field(ge=0)
+    norm_ratio: float = Field(gt=0.0)
+    global_alpha: float = Field(gt=0.0)
+
+    prompt_count: int = Field(gt=0)
+    group_count: int = Field(gt=0)
+    aggregation: str
+    decision_rule: str
+    bootstrap_resamples: int = Field(gt=0)
+    bootstrap_seed: int
+
+    method_summaries: list[MethodConditionSummary] = Field(min_length=1)
+    primary_comparisons: list[PairedComparison] = Field(min_length=1)
+    permutation_band: dict[str, float] = Field(default_factory=dict)
+
+    resolution_manifest_hash: HashString
+    forecasts_hash: HashString
+    observations_hash: HashString
+    commitments_verified: bool
+    scientific_forecast_evaluation: bool
+    analysis_hash: HashString
+
+    environment: dict[str, Any] = Field(default_factory=dict)
+    code_commit: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def _check_analysis(self) -> FinalTestAnalysisRecord:
+        keys = [
+            (s.method_id, s.state_condition.value, s.condition_index) for s in self.method_summaries
+        ]
+        if len(set(keys)) != len(keys):
+            raise ValueError("a method and condition is summarized twice")
+        if self.scientific_forecast_evaluation and not self.commitments_verified:
+            raise ValueError(
+                "an evaluation whose commitments did not verify is not a scientific forecast "
+                "evaluation, whatever its numbers look like"
+            )
+        recomputed = compute_final_test_analysis_hash(self.model_dump(mode="json"))
+        if recomputed != self.analysis_hash:
+            raise ValueError(
+                f"analysis_hash {self.analysis_hash} does not match the analysis contents "
+                f"({recomputed}); the file has been edited since it was written"
+            )
+        return self
+
+
 class WrongStateMatch(Base):
     """One final-test prompt and the donor whose state substitutes for its own."""
 

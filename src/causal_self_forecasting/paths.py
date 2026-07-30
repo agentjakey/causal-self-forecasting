@@ -60,6 +60,16 @@ STATE_AUDIT_PREDICTORS = "state_audit_predictors.jsonl"
 STATE_AUDIT_PAIRING = "state_audit_wrong_state_pairing.json"
 STATE_AUDIT_COMMITMENT_SUMMARY = "state_audit_commitment_summary.json"
 
+# Final-test resolution and analysis. The resolution manifest is written *beside* the clean-stage
+# manifest, never over it: the clean stage is the evidence that the states and logits existed
+# before any outcome did.
+STATE_AUDIT_RESOLUTION = "state_audit_resolution.json"
+STATE_AUDIT_PAIR_SCORES = "state_audit_pair_scores.jsonl"
+STATE_AUDIT_PROMPT_SCORES = "state_audit_prompt_scores.jsonl"
+STATE_AUDIT_METHOD_SUMMARY = "state_audit_method_summary.json"
+STATE_AUDIT_ANALYSIS = "state_audit_analysis.json"
+STATE_AUDIT_FIGURES = "figures"
+
 
 def data_dir() -> Path:
     return repo_root() / "data"

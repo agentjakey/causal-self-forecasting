@@ -256,8 +256,46 @@ uv run csf state-audit commit-forecasts `
 uv run csf state-audit verify-commitments --run-id bluedot-final-test
 ```
 
-**11. Final-test resolution and analysis.** Not implemented, and deliberately the last thing
-built. This is where a result would come from, and none exists.
+**11. Final-test resolution.** Implemented, **not yet executed**. This is the irreversible step:
+544 intervened forwards (32 prompts x 17 candidates), reusing the clean logits and states so no
+clean forward runs and every delta is measured against the baseline the forecasts were made
+against. It refuses a dirty working tree, a setting that differs from the calibration decision, a
+commitment count other than 512, any pre-existing reveal, and any pre-existing outcome.
+
+```powershell
+uv run csf state-audit resolve-final-test `
+  --config configs/state_audit/bluedot_final_test_clean.yaml --run-id bluedot-final-test `
+  --layer 13 --norm-ratio 0.02 --global-alpha 106.87158268272867 `
+  --yes-i-understand-this-is-irreversible
+```
+
+**12. Analysis and replay.** Model-free. Nothing is fitted, refitted, tuned, or dropped.
+
+```powershell
+uv run csf state-audit analyze-final-test --run-id bluedot-final-test --training-run-id bluedot-training
+uv run csf state-audit replay-analysis --run-id bluedot-final-test
+```
+
+## Results
+
+**No result exists yet.** The final test has not been resolved: `results/runs/bluedot-final-test/`
+holds 512 sealed commitments and zero outcomes, and the analysis has nothing to read.
+
+When it is resolved the numbers will appear in `docs/experiment_log.md` and in machine-readable
+form at `state_audit_analysis.json`, `state_audit_method_summary.json`,
+`state_audit_prompt_scores.jsonl`, and `state_audit_pair_scores.jsonl` inside the run directory,
+with two figures under `figures/`. Nothing will be copied into this README by hand.
+
+Two things are fixed in advance so they cannot be renegotiated afterwards. Absolute errors are
+averaged **within each prompt first**, then across the 32 prompts, because the 16 interventions on
+one prompt share a question and a state. And a comparison supports its hypothesis only if the 95
+percent paired bootstrap interval excludes zero in the hypothesized direction: **an interval
+crossing zero is reported as no detected difference**, never as a trend.
+
+For context on which way the current evidence points, the training-fold cross-validated errors
+already favour the *visible-information* model over the state-conditioned one (0.3433 against
+0.3617). That is a training-fold diagnostic and not the test, but a null or negative result on
+H-BD1 would be unsurprising, and it will be reported as prominently as a positive one would be.
 
 ### Verification loads no model
 

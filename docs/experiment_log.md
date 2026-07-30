@@ -818,12 +818,72 @@ the flip probability is the training flip base rate of 0.029297. `p_bias_suppres
 **The study is now at the commitment checkpoint and stops here.** No final-test intervention has
 been applied.
 
+## 2026-07-29: final-test resolution and analysis implemented, not executed
+
+**Nothing was run against the model in this entry, and no result exists.** The final test remains
+unresolved: `results/runs/bluedot-final-test/` holds 512 sealed commitments and zero outcomes.
+
+What was built:
+
+* `csf state-audit resolve-final-test`, the irreversible step. 544 intervened forwards, 32 prompts
+  x 17 candidates. It reuses the clean logits and states from the clean stage, so `clean_forwards`
+  on its manifest is a typed literal zero and every delta is measured against exactly the baseline
+  the forecasts were made against. Recomputing the clean pass would be a different clean run and any
+  drift would land silently in every target.
+* `csf state-audit analyze-final-test` and `csf state-audit replay-analysis`, both model-free.
+* `paired_grouped_bootstrap`, `prompt_first_mean`, and `spearman_correlation` in
+  `scoring/metrics.py`. The paired bootstrap is the sibling the preregistration's conflict table
+  (S10) required: it draws **one** set of resampled groups per replicate and evaluates both methods
+  on it, because bootstrapping the two independently and differencing the intervals would discard
+  the pairing and produce an interval far too wide.
+
+What the resolver refuses, all before the weights are touched:
+
+| Guard | Behaviour |
+| --- | --- |
+| Dirty working tree | Hard stop. The commit that performs an irreversible step is inside the hashed manifest, so it must describe what actually ran. This is the only step in the study that refuses a dirty tree. |
+| Setting drift | The layer, ratio, and alpha are passed in and compared against the calibration decision artifact. |
+| Wrong commitment count | Requires exactly 32 x 16 = 512, each with a forecast and its own salt. |
+| Any pre-existing reveal | Refused. A disclosed salt means the run is not at the checkpoint. |
+| Any pre-existing outcome | Refused, which is also what makes rerunning a completed test impossible. |
+| Missing confirmation flag | The CLI requires `--yes-i-understand-this-is-irreversible`. |
+
+After resolution it reveals all 512 commitments with **no-selection** reveals, since every
+candidate is resolved and there is nothing for a seed to choose; verifies each hash from its
+revealed salt; independently recomputes every stored target from the logits beside it; and records
+that every `committed_at` precedes every `observed_at`.
+
+The analysis applies preregistration sections 11.1 through 11.4 mechanically: absolute error
+averaged within each prompt first and then across the 32 prompts, the two primary paired
+differences, 10,000 paired resamples over prompt groups from `derive_seed("bluedot.bootstrap",
+20260727)`, and RMSE, sign accuracy, Spearman, top-effect ranking, flip count, and no-op error
+alongside. The Brier score is reported only at 20 or more realized flips; below that the field is
+null and carries the reason, because a Brier score over a handful of flips is a number that would
+be quoted. `PairedComparison` refuses to be constructed with a `supported` flag that does not follow
+from its own interval, so the decision rule cannot be applied by hand.
+
+It writes `state_audit_analysis.json`, `state_audit_method_summary.json`,
+`state_audit_prompt_scores.jsonl`, `state_audit_pair_scores.jsonl`, and two figures under
+`figures/`. Every figure coordinate comes from the computed numbers; nothing is hard-coded.
+
+**One honest note recorded before the outcomes exist.** The training-fold cross-validated errors
+were 0.3388 for intervention-only, 0.3433 for visible-information, and 0.3617 for the
+state-conditioned bilinear, so on training folds the state block costs accuracy rather than adding
+it. That is a training-fold diagnostic and not the test. But it means a **null or negative result on
+H-BD1 is the more likely outcome**, and it is being written down here, before resolution, so that it
+cannot later be presented as an expected finding either way.
+
+Offline tests added: 37 unit tests for the guards, scoring, prompt-first aggregation, the paired
+bootstrap, the decision rule in all three of its outcomes, the Brier floor at and below the
+threshold, target reverification, and the all-candidate reveal; and 20 fixture integration tests
+covering the full resolve, analyze, and replay path end to end on the fixture model, including
+refusal to rerun a completed test and refusal from a dirty tree.
+
 ## Next entry
 
-Final-test resolution (G9) applies the 17 candidates to each of the 32 final-test prompts, 544
-intervened forwards, and is the first thing that produces a final-test outcome. It must not run
-until the commitments above are intended to be resolved, because resolving them is irreversible:
-the blinding cannot be restored.
+Executing the final test. The exact command is in the README; it is one command, it is
+irreversible, and it must not be run until the study is ready to be scored, because resolving the
+commitments cannot be undone.
 
 No CSF-Bench scientific result exists yet, and none should be reported until a real comparison
 has been run and verified.

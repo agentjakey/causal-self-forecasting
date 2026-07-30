@@ -236,10 +236,10 @@ baselines, and it defers Phases 5, 6, and 8 through 13.
 | B6 | `StateAuditExample` and block-structured features | **done, 2026-07-29**; `state_audit/features.py`, blocks 16/39/16/256 |
 | B7 | `TransformFitRecord` and fit-boundary enforcement | **done, 2026-07-29** |
 | B8 | Three ridges and grouped cross-validation | **done, 2026-07-29**; `state_audit/fit.py` |
-| B9 | Wrong-state matching and ten derangements | **done, 2026-07-29**; the paired prompt bootstrap is analysis (G11) and is not started |
-| B10 | `csf verify study` and `csf replay` | partial; `csf state-audit verify-run` verifies one run from artifacts with no model |
+| B9 | Wrong-state matching, ten derangements, paired prompt bootstrap | **done, 2026-07-29** |
+| B10 | `csf verify study` and `csf replay` | **done, 2026-07-29**; `verify-run`, `verify-commitments`, and `replay-analysis` all verify from artifacts with no model |
 | B11 | Smoke run (8 prompts) | **done, 2026-07-28**; `results/runs/bluedot-smoke-layer13`, 144 forwards, verified, `scientific_result: false` |
-| B12 | Calibration, training, final test | calibration **done, 2026-07-29**; training and final test not started, and both need B6 through B9 first |
+| B12 | Calibration, training, final test | calibration and training **done**; final-test clean stage and 512 commitments **done**; resolution and analysis **implemented, not executed** |
 
 Compute for the whole arm is about 40 minutes of forward time on this CPU, about 61 with the
 preregistered layer-20 fallback. No GPU and no compute grant is needed. See
@@ -270,3 +270,4 @@ BlueDot arm, which uses no adapter.
 * Private payloads, salts, and selection seeds never enter version control.
 * If the model organism is ever built, it stays benign: a controlled answer-position preference
   under a deployment-like wrapper, nothing more. It is deferred; see `docs/deferred_work.md`.
+

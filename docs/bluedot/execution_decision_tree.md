@@ -1,4 +1,4 @@
-# BlueDot state-dependence arm: execution decision tree
+﻿# BlueDot state-dependence arm: execution decision tree
 
 Operational companion to `docs/bluedot/preregistration_state_dependence.md`. That document fixes
 the science; this one fixes the order of operations and the gate at every branch point.
@@ -366,6 +366,17 @@ is visible rather than silent.
 
 ## G9. Final-test resolution
 
+**Implemented, not executed, as of 2026-07-29.** `csf state-audit resolve-final-test` performs
+this gate. It is the only step in the study that refuses a dirty working tree, because the commit
+that performs an irreversible step is recorded inside its hashed manifest. It also refuses a setting
+that differs from the calibration decision, a commitment count other than 512, any pre-existing
+reveal, and any pre-existing outcome, and it requires an explicit confirmation flag.
+
+It runs **no clean forward**: the clean logits and states come from G7, so every delta is measured
+against exactly the baseline the forecasts were made against. 544 intervened forwards, then 512
+no-selection reveals.
+
+
 **Only after G8 completes.** Apply all 17 candidates to each of the 32 final-test prompts:
 32 x 17 = 544 intervened forwards, plus the 32 clean forwards already taken at G7 =
 **576 forwards** for the role, roughly 5 minutes.
@@ -404,6 +415,13 @@ Run the study verifier. It must check, from artifacts rather than from prose:
 does not verify is reported as a run that did not verify.
 
 ## G11. Analysis, run once
+
+**Implemented, not executed, as of 2026-07-29.** `csf state-audit analyze-final-test` loads no
+model and fits nothing. It refuses to rerun over an existing analysis without an explicit force,
+because rerunning after seeing the numbers is how a decision rule gets renegotiated.
+`csf state-audit replay-analysis` recomputes every summary and both comparisons from artifacts, which
+is the check a third party runs.
+
 
 **No model is loaded.** This stage recomputes from committed artifacts only; make the loader
 raise, so an accidental forward pass is impossible.
@@ -476,3 +494,4 @@ long-prompt band of 1.5 to 2 times `T` puts the arm at roughly 40 to 80 minutes,
 minutes with the fallback.
 
 **No GPU and no compute grant is needed.**
+

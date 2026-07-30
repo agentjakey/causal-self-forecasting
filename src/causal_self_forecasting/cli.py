@@ -889,6 +889,145 @@ def state_audit_commit_forecasts(
         raise typer.Exit(code=1)
 
 
+@state_audit_app.command("resolve-final-test")
+def state_audit_resolve_final_test(
+    config: Path = typer.Option(..., "--config", help="Path to the final-test config."),
+    run_id: str = typer.Option(..., "--run-id", help="The final-test run at the checkpoint."),
+    layer: int = typer.Option(..., "--layer", help="Required layer. Checked, not trusted."),
+    norm_ratio: float = typer.Option(..., "--norm-ratio", help="Required calibrated ratio."),
+    global_alpha: float = typer.Option(..., "--global-alpha", help="Required calibrated alpha."),
+    yes_i_understand_this_is_irreversible: bool = typer.Option(
+        False,
+        "--yes-i-understand-this-is-irreversible",
+        help="Required. Resolving spends the blinding and cannot be undone.",
+    ),
+) -> None:
+    """Apply all 17 candidates to every final-test prompt, then reveal and verify. IRREVERSIBLE.
+
+    Loads the model for 544 intervened forwards: 32 prompts x (16 signed + 1 no-op). It runs **no
+    clean forward**; the clean logits and states come from the clean stage, so every delta is
+    measured against exactly the baseline the forecasts were made against.
+
+    Every guard runs before the weights are touched. It refuses a dirty working tree, a setting
+    that differs from the verified calibration decision, a commitment count other than the
+    preregistered 512, any pre-existing reveal, and any pre-existing outcome artifact. The commit
+    that performs it is recorded inside the hashed manifest.
+
+    Once this completes, the study's forecasts have been checked against outcomes and that cannot
+    be undone. The confirmation flag is required for that reason.
+    """
+    from .state_audit.resolve import FinalTestResolutionError, resolve_final_test
+
+    if not yes_i_understand_this_is_irreversible:
+        typer.secho(
+            "refusing to resolve the final test without --yes-i-understand-this-is-irreversible. "
+            "Applying these interventions spends the study's blinding permanently.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    directory = ensure_run_dir(run_id)
+    configure_logging("INFO", log_file=directory / RUN_LOG)
+
+    try:
+        report = resolve_final_test(config, run_id, layer, norm_ratio, global_alpha)
+    except FinalTestResolutionError as error:
+        typer.secho(f"final-test resolution refused: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+
+    if not report["commitments_verified"]:
+        typer.secho(
+            "the commitments did not verify. This is recorded as evidence and must not be "
+            "re-resolved away; report the run as a run that did not verify.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if report["status"] != "complete":
+        typer.secho(
+            f"run {run_id} did not complete: {report['counts']['failures']} failures were recorded",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@state_audit_app.command("analyze-final-test")
+def state_audit_analyze_final_test(
+    run_id: str = typer.Option(..., "--run-id", help="The resolved final-test run."),
+    training_run_id: str = typer.Option(
+        ..., "--training-run-id", help="The training run the predictors were fitted on."
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Rerun a completed analysis. Only to repair a documented bug."
+    ),
+) -> None:
+    """Score the sealed forecasts and run the preregistered analysis. Loads no model.
+
+    Nothing is fitted, refitted, tuned, or dropped. Absolute errors are averaged within each prompt
+    first, then across the 32 prompts; the two primary paired differences are bootstrapped with
+    10,000 paired resamples over prompt groups from the frozen seed; and the decision rule is
+    applied mechanically. An interval crossing zero is reported as no detected difference.
+
+    Writes machine-readable tables and two minimal figures. Runs once by default: rerunning after
+    seeing the numbers is how a decision rule gets renegotiated.
+    """
+    from .state_audit.analyze import AnalysisError, analyze_final_test
+
+    try:
+        report = analyze_final_test(run_id, training_run_id, force=force)
+    except AnalysisError as error:
+        typer.secho(f"analysis failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+    for comparison in report["primary_comparisons"]:
+        colour = typer.colors.GREEN if comparison["supported"] else typer.colors.YELLOW
+        typer.secho(f"{comparison['name']}: {comparison['interpretation']}", fg=colour, err=True)
+    if not report["scientific_forecast_evaluation"]:
+        typer.secho(
+            "this analysis is not a scientific forecast evaluation: the commitments did not verify "
+            "or the resolution did not complete",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@state_audit_app.command("replay-analysis")
+def state_audit_replay_analysis(
+    run_id: str = typer.Option(..., "--run-id", help="The analyzed final-test run."),
+    output: Path | None = typer.Option(None, "--output", help="Write the report to a file."),
+) -> None:
+    """Recompute the analysis from artifacts and check it against the stored record.
+
+    Loads no model. This is the check a third party runs: every method summary and both primary
+    comparisons are recomputed from the forecasts and outcomes on disk, so a stored analysis that
+    does not follow from its own inputs is detectable without any weights.
+    """
+    from .state_audit.analyze import AnalysisError, replay_analysis
+
+    try:
+        report = replay_analysis(run_id)
+    except AnalysisError as error:
+        typer.secho(f"replay failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+    if output is not None:
+        atomic_write_json(output, report)
+    if not report["valid"]:
+        typer.secho(
+            f"the stored analysis does not recompute: {report['failures']}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
 @state_audit_app.command("verify-commitments")
 def state_audit_verify_commitments(
     run_id: str = typer.Option(..., "--run-id", help="Final-test run id to verify."),

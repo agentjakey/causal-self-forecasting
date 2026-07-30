@@ -775,6 +775,268 @@ def test_committing_is_refused_if_a_final_test_outcome_exists(workspace: Workspa
         commit(workspace)
 
 
+# ---------------------------------------------------------------------------
+# Final-test resolution and analysis, end to end on the fixture
+# ---------------------------------------------------------------------------
+
+
+def _pretend_clean_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fixture tree is dirty during development; the guard itself is unit-tested."""
+    from causal_self_forecasting.state_audit import resolve as resolve_module
+
+    monkeypatch.setattr(
+        resolve_module,
+        "git_state",
+        lambda: {"commit": "0" * 40, "dirty": False, "branch": "test"},
+    )
+
+
+def resolve(workspace: Workspace):
+    from causal_self_forecasting.state_audit.resolve import resolve_final_test
+
+    return resolve_final_test(
+        workspace.final_config, FINAL_RUN_ID, LAYER, SELECTED_RATIO, SELECTED_ALPHA
+    )
+
+
+@pytest.fixture
+def resolved(committed, monkeypatch: pytest.MonkeyPatch):
+    workspace, commit_report = committed
+    _pretend_clean_tree(monkeypatch)
+    return workspace, commit_report, resolve(workspace)
+
+
+def test_resolution_applies_every_candidate_and_runs_no_clean_forward(resolved) -> None:
+    _, _, report = resolved
+    counts = report["counts"]
+    assert report["status"] == "complete"
+    assert report["run_role"] == "final_test_resolved"
+    assert counts["observed_prompts"] == FINAL_N
+    assert counts["observed_signed_observations"] == FINAL_N * 16
+    assert counts["observed_noop_observations"] == FINAL_N
+    assert counts["observed_intervened_forwards"] == FINAL_N * CANDIDATES_PER_PROMPT
+    assert counts["clean_forwards"] == 0
+    assert counts["failures"] == 0
+    assert report["layer"] == LAYER
+    assert report["norm_ratio"] == SELECTED_RATIO
+    assert report["global_alpha"] == pytest.approx(SELECTED_ALPHA)
+
+
+def test_resolution_reveals_every_commitment_without_selection(resolved) -> None:
+    from causal_self_forecasting.trials.commitment import read_reveals
+
+    _, _, report = resolved
+    expected = FINAL_N * RECORDS_PER_PROMPT
+    assert report["counts"]["reveals"] == expected
+    assert report["counts"]["commitments_checked"] == expected
+    assert report["commitments_verified"] is True
+
+    reveals = read_reveals(FINAL_RUN_ID)
+    assert len(reveals) == expected
+    assert all(reveal.no_selection for reveal in reveals)
+    assert all(reveal.selected_intervention_id is None for reveal in reveals)
+    assert all(reveal.verified for reveal in reveals)
+
+
+def test_every_commitment_predates_every_outcome_after_resolution(resolved) -> None:
+    _, _, report = resolved
+    ordering = report["ordering"]
+    assert ordering["ordering_valid"] is True
+    assert ordering["final_test_outcomes_exist"] is True
+    assert ordering["latest_committed_at"] < ordering["earliest_observed_at"]
+
+
+def test_resolution_integrity_is_exact(resolved) -> None:
+    _, _, report = resolved
+    integrity = report["integrity"]
+    assert integrity["max_abs_noop_target"] == pytest.approx(0.0, abs=1e-3)
+    assert integrity["max_abs_noop_delta_norm"] == 0.0
+    assert integrity["max_intervention_reconstruction_error"] == pytest.approx(0.0, abs=1e-5)
+
+
+def test_resolution_refuses_to_rerun_a_completed_test(resolved) -> None:
+    from causal_self_forecasting.state_audit.resolve import FinalTestResolutionError
+
+    workspace, _, _ = resolved
+    with pytest.raises(FinalTestResolutionError, match="already holds outcome artifacts"):
+        resolve(workspace)
+
+
+def test_resolution_refuses_a_setting_that_differs_from_the_decision(
+    committed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from causal_self_forecasting.state_audit.resolve import (
+        FinalTestResolutionError,
+        resolve_final_test,
+    )
+
+    workspace, _ = committed
+    _pretend_clean_tree(monkeypatch)
+    with pytest.raises(FinalTestResolutionError, match="calibrated alpha"):
+        resolve_final_test(workspace.final_config, FINAL_RUN_ID, LAYER, SELECTED_RATIO, 99.0)
+    with pytest.raises(FinalTestResolutionError, match="calibrated ratio"):
+        resolve_final_test(workspace.final_config, FINAL_RUN_ID, LAYER, 0.10, SELECTED_ALPHA)
+
+
+def test_resolution_refuses_a_dirty_tree(committed, monkeypatch: pytest.MonkeyPatch) -> None:
+    from causal_self_forecasting.state_audit import resolve as resolve_module
+    from causal_self_forecasting.state_audit.resolve import (
+        FinalTestResolutionError,
+        resolve_final_test,
+    )
+
+    workspace, _ = committed
+    monkeypatch.setattr(
+        resolve_module, "git_state", lambda: {"commit": "abc", "dirty": True, "branch": "x"}
+    )
+    with pytest.raises(FinalTestResolutionError, match="uncommitted changes"):
+        resolve_final_test(
+            workspace.final_config, FINAL_RUN_ID, LAYER, SELECTED_RATIO, SELECTED_ALPHA
+        )
+    assert not (run_dir(FINAL_RUN_ID) / "state_audit_observations.jsonl").exists()
+
+
+@pytest.fixture
+def analyzed(resolved):
+    from causal_self_forecasting.state_audit.analyze import analyze_final_test
+
+    workspace, _commit_report, resolution = resolved
+    return workspace, resolution, analyze_final_test(FINAL_RUN_ID, TRAIN_RUN_ID)
+
+
+def test_the_analysis_scores_every_condition_prompt_first(analyzed) -> None:
+    _, _, report = analyzed
+    assert report["prompt_count"] == FINAL_N
+    assert report["group_count"] == FINAL_N
+    assert len(report["method_summaries"]) == RECORDS_PER_PROMPT
+    assert report["scientific_forecast_evaluation"] is True
+    assert report["commitments_verified"] is True
+    for summary in report["method_summaries"]:
+        assert summary["prompt_count"] == FINAL_N
+        assert summary["signed_pair_count"] == FINAL_N * 16
+        assert summary["noop_pair_count"] == FINAL_N
+
+
+def test_the_analysis_reports_both_primary_comparisons(analyzed) -> None:
+    _, _, report = analyzed
+    comparisons = report["primary_comparisons"]
+    assert len(comparisons) == 2
+    assert comparisons[0]["left"] == "visible_information_ridge:none:0"
+    assert comparisons[0]["right"] == "state_bilinear_ridge:true:0"
+    assert comparisons[1]["left"] == "state_bilinear_ridge:wrong_example:0"
+    assert comparisons[1]["right"] == "state_bilinear_ridge:true:0"
+    for comparison in comparisons:
+        assert comparison["prompt_count"] == FINAL_N
+        assert comparison["group_count"] == FINAL_N
+        assert comparison["ci_low"] <= comparison["ci_high"]
+        # The decision rule is mechanical: support requires excluding zero.
+        assert comparison["supported"] is (
+            comparison["excludes_zero"] and comparison["point_estimate"] > 0
+        )
+        if not comparison["excludes_zero"]:
+            assert "No detected difference" in comparison["interpretation"]
+
+
+def test_the_analysis_uses_the_frozen_bootstrap_settings(analyzed) -> None:
+    from causal_self_forecasting.reproducibility import derive_seed
+
+    _, _, report = analyzed
+    assert report["bootstrap"]["resamples"] == 10_000
+    assert report["bootstrap"]["seed"] == derive_seed("bluedot.bootstrap", 20260727)
+
+
+def test_the_analysis_writes_tables_and_figures(analyzed) -> None:
+    _, _, report = analyzed
+    directory = run_dir(FINAL_RUN_ID)
+    for name in (
+        "state_audit_analysis.json",
+        "state_audit_method_summary.json",
+        "state_audit_pair_scores.jsonl",
+        "state_audit_prompt_scores.jsonl",
+    ):
+        assert (directory / name).exists(), name
+
+    pairs = list(read_jsonl(directory / "state_audit_pair_scores.jsonl"))
+    assert len(pairs) == RECORDS_PER_PROMPT * FINAL_N * CANDIDATES_PER_PROMPT
+    prompts = list(read_jsonl(directory / "state_audit_prompt_scores.jsonl"))
+    assert len(prompts) == RECORDS_PER_PROMPT * FINAL_N
+
+    figures = sorted((directory / "figures").glob("*.png"))
+    assert len(figures) == 2
+    assert all(path.stat().st_size > 0 for path in figures)
+    assert report["artifacts"]["figures"]
+
+
+def test_the_permutations_are_a_band_not_ten_tests(analyzed) -> None:
+    _, _, report = analyzed
+    band = report["permutation_band"]
+    assert band["condition_count"] == 10.0
+    assert band["min_mae"] <= band["median_mae"] <= band["max_mae"]
+
+
+def test_the_analysis_omits_brier_below_the_flip_floor(analyzed) -> None:
+    _, _, report = analyzed
+    for summary in report["method_summaries"]:
+        if summary["observed_flip_count"] < summary["brier_min_flips"]:
+            assert summary["brier_score"] is None
+            assert summary["brier_omitted_reason"]
+        else:
+            assert summary["brier_score"] is not None
+
+
+def test_the_analysis_runs_once(analyzed) -> None:
+    from causal_self_forecasting.state_audit.analyze import AnalysisError, analyze_final_test
+
+    with pytest.raises(AnalysisError, match="run once"):
+        analyze_final_test(FINAL_RUN_ID, TRAIN_RUN_ID)
+
+
+def test_the_model_free_replay_reproduces_the_stored_analysis(
+    analyzed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from causal_self_forecasting.models import loader as loader_module
+    from causal_self_forecasting.state_audit.analyze import replay_analysis
+
+    def _refuse(*args, **kwargs):
+        raise AssertionError("the replay must not load a model")
+
+    monkeypatch.setattr(loader_module, "load_model", _refuse)
+
+    report = replay_analysis(FINAL_RUN_ID)
+    assert report["valid"] is True
+    assert report["failures"] == []
+    assert report["conditions_checked"] == RECORDS_PER_PROMPT
+    assert report["comparisons_checked"] == 2
+
+
+def test_the_replay_detects_an_edited_analysis(analyzed) -> None:
+    from causal_self_forecasting.state_audit.analyze import replay_analysis
+
+    path = run_dir(FINAL_RUN_ID) / "state_audit_analysis.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["method_summaries"][0]["mae"] = 0.0
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    # The record recomputes its own content hash, so an edited analysis does not even load.
+    from causal_self_forecasting.state_audit.analyze import AnalysisError
+
+    with pytest.raises((AnalysisError, ValueError)):
+        replay_analysis(FINAL_RUN_ID)
+
+
+def test_the_replay_detects_edited_outcomes(analyzed) -> None:
+    from causal_self_forecasting.state_audit.analyze import replay_analysis
+
+    path = run_dir(FINAL_RUN_ID) / "state_audit_observations.jsonl"
+    rows = list(read_jsonl(path))
+    rows[0]["run_id"] = "somebody-elses-run"
+    write_jsonl(path, rows)
+
+    report = replay_analysis(FINAL_RUN_ID)
+    assert report["valid"] is False
+    assert any("outcomes" in failure for failure in report["failures"])
+
+
 def test_the_command_group_lists_the_new_commands() -> None:
     result = runner.invoke(app, ["state-audit", "--help"])
     assert result.exit_code == 0
@@ -784,6 +1046,9 @@ def test_the_command_group_lists_the_new_commands() -> None:
         "final-test-clean",
         "commit-forecasts",
         "verify-commitments",
+        "resolve-final-test",
+        "analyze-final-test",
+        "replay-analysis",
     ):
         assert command in result.stdout
 

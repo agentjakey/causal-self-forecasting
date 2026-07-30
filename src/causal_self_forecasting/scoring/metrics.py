@@ -141,6 +141,136 @@ def top_effect_accuracy(trials: Sequence[Sequence[PairScore]]) -> float:
     return correct / len(usable)
 
 
+def prompt_first_mean(values_by_group: dict[str, float]) -> float:
+    """Mean over one value per prompt group.
+
+    The aggregation the state-dependence arm uses everywhere. Each group contributes exactly one
+    number, so a prompt with sixteen interventions counts once rather than sixteen times. Pooling
+    at the pair level would treat correlated pairs as independent evidence.
+    """
+    if not values_by_group:
+        raise ValueError("cannot average over zero groups")
+    return sum(values_by_group.values()) / len(values_by_group)
+
+
+def _ranks(values: Sequence[float]) -> list[float]:
+    """Ranks with ties averaged, which is what Spearman needs."""
+    order = sorted(range(len(values)), key=lambda index: values[index])
+    ranks = [0.0] * len(values)
+    position = 0
+    while position < len(order):
+        end = position
+        while end + 1 < len(order) and values[order[end + 1]] == values[order[position]]:
+            end += 1
+        shared = (position + end) / 2.0 + 1.0
+        for index in range(position, end + 1):
+            ranks[order[index]] = shared
+        position = end + 1
+    return ranks
+
+
+def spearman_correlation(left: Sequence[float], right: Sequence[float]) -> float | None:
+    """Spearman rank correlation, or None when it is undefined.
+
+    Implemented here rather than pulled from scipy, which is not a dependency. Returns None when
+    either side is constant: the correlation is genuinely undefined then, and returning zero would
+    read as "no relationship measured" rather than "not measurable".
+    """
+    if len(left) != len(right):
+        raise ValueError(f"cannot correlate {len(left)} values against {len(right)}")
+    if len(left) < 2:
+        return None
+
+    left_ranks = _ranks(list(left))
+    right_ranks = _ranks(list(right))
+    n = len(left_ranks)
+    mean_left = sum(left_ranks) / n
+    mean_right = sum(right_ranks) / n
+    covariance = sum(
+        (a - mean_left) * (b - mean_right) for a, b in zip(left_ranks, right_ranks, strict=True)
+    )
+    left_spread = math.sqrt(sum((a - mean_left) ** 2 for a in left_ranks))
+    right_spread = math.sqrt(sum((b - mean_right) ** 2 for b in right_ranks))
+    if left_spread == 0.0 or right_spread == 0.0:
+        return None
+    return covariance / (left_spread * right_spread)
+
+
+@dataclass(frozen=True)
+class PairedDifference:
+    """A paired comparison of two methods over the same prompt groups."""
+
+    point_estimate: float
+    ci_low: float
+    ci_high: float
+    resamples: int
+    seed: int
+    group_count: int
+    excludes_zero: bool
+
+    @property
+    def sign(self) -> str:
+        if not self.excludes_zero:
+            return "no detected difference"
+        return "positive" if self.point_estimate > 0 else "negative"
+
+
+def paired_grouped_bootstrap(
+    left_by_group: dict[str, float],
+    right_by_group: dict[str, float],
+    resamples: int = 10_000,
+    confidence: float = 0.95,
+    seed: int = 0,
+) -> PairedDifference:
+    """Bootstrap the paired difference `mean(left) - mean(right)` over prompt groups.
+
+    Paired, and that is the whole point: every replicate draws **one** set of resampled groups and
+    evaluates both methods on it. Bootstrapping the two methods independently and differencing the
+    intervals would throw away the pairing and produce an interval far too wide, because the two
+    methods' errors on the same prompt are strongly correlated.
+
+    The existing `grouped_bootstrap_ci` resamples groups but computes a pair-level statistic for
+    one method. This is the prompt-aggregated, two-method sibling the preregistration requires.
+    """
+    if set(left_by_group) != set(right_by_group):
+        missing = sorted(set(left_by_group) ^ set(right_by_group))
+        raise ValueError(
+            f"a paired comparison needs the same groups on both sides; these differ: {missing[:5]}"
+        )
+    groups = sorted(left_by_group)
+    if not groups:
+        raise ValueError("cannot compare over zero groups")
+
+    point = prompt_first_mean(left_by_group) - prompt_first_mean(right_by_group)
+    if len(groups) < 2:
+        return PairedDifference(point, point, point, 0, seed, len(groups), False)
+
+    rng = random.Random(seed)
+    estimates: list[float] = []
+    count = len(groups)
+    for _ in range(resamples):
+        total = 0.0
+        for _ in range(count):
+            group = groups[rng.randrange(count)]
+            total += left_by_group[group] - right_by_group[group]
+        estimates.append(total / count)
+
+    estimates.sort()
+    tail = (1 - confidence) / 2
+    low_index = max(0, math.floor(tail * len(estimates)))
+    high_index = min(len(estimates) - 1, math.ceil((1 - tail) * len(estimates)) - 1)
+    low, high = estimates[low_index], estimates[high_index]
+    return PairedDifference(
+        point_estimate=point,
+        ci_low=low,
+        ci_high=high,
+        resamples=resamples,
+        seed=seed,
+        group_count=count,
+        excludes_zero=(low > 0.0) or (high < 0.0),
+    )
+
+
 def grouped_bootstrap_ci(
     scores: Sequence[PairScore],
     statistic: Callable[[Sequence[PairScore]], float],

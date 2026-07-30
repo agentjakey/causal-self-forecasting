@@ -4,6 +4,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added (2026-07-29, BlueDot slices B9, B10, and B12: final-test resolution and analysis)
+
+**Implemented and tested. Not executed: the final test remains unresolved and no result exists.**
+
+* `state_audit/resolve.py` and `csf state-audit resolve-final-test`, the irreversible step. 544
+  intervened forwards over 32 prompts x 17 candidates, reusing the clean logits and states so no
+  clean forward runs and every delta is measured against the baseline the forecasts were made
+  against. `clean_forwards` on the manifest is a typed literal zero.
+* Resolution guards, all before the model loads: a **dirty working tree is a hard stop** and the
+  commit is recorded inside the hashed manifest; the layer, ratio, and alpha are compared against
+  the calibration decision artifact; the commitment count must be exactly 512 with a forecast and a
+  salt each; any pre-existing reveal or outcome artifact refuses the run; and the CLI requires
+  `--yes-i-understand-this-is-irreversible`.
+* All-candidate resolution reveals every commitment with a **no-selection** reveal, verifies each
+  hash from its revealed salt, independently recomputes every stored target from its own logits,
+  and records that every `committed_at` precedes every `observed_at`.
+* `state_audit/analyze.py`, `csf state-audit analyze-final-test`, and
+  `csf state-audit replay-analysis`, all model-free. Nothing is fitted, refitted, tuned, or dropped.
+  Prompt-first aggregation, the two primary paired differences, 10,000 paired resamples over prompt
+  groups from the frozen seed, and RMSE, sign accuracy, Spearman, top-effect ranking, flip count,
+  and no-op error alongside. The Brier score is reported only at 20 or more realized flips.
+* `paired_grouped_bootstrap`, `prompt_first_mean`, and `spearman_correlation` in
+  `scoring/metrics.py`. The paired bootstrap draws one set of resampled groups per replicate and
+  evaluates both methods on it; bootstrapping them independently would discard the pairing and
+  widen the interval for no reason. This closes conflict S10 in the preregistration.
+* `FinalTestResolutionManifest`, `FinalTestAnalysisRecord`, `MethodConditionSummary`, and
+  `PairedComparison`. `PairedComparison` refuses to be constructed with a `supported` flag that does
+  not follow from its own interval, so the decision rule cannot be applied by hand.
+  `FinalTestAnalysisRecord` is the one record allowed a real `scientific_forecast_evaluation`
+  boolean rather than a `Literal[False]`, and it is true only when the commitments verified.
+* Machine-readable tables (`state_audit_analysis.json`, `state_audit_method_summary.json`,
+  `state_audit_prompt_scores.jsonl`, `state_audit_pair_scores.jsonl`) and two figures drawn
+  entirely from computed values.
+* 37 unit tests and 20 fixture integration tests, including outcome-before-commitment rejection,
+  the all-candidate reveal, timestamp ordering, exact candidate counts, scoring from sealed
+  forecasts, prompt-first aggregation, the paired bootstrap, model-free replay, and refusal to
+  rerun a completed test.
+
+### Fixed (2026-07-29)
+
+* The model-free replay compared the resolution's *stored* outcome hash against the analysis's
+  *stored* outcome hash, which agree with each other even after the outcomes file underneath both
+  has been rewritten. It now hashes the file on disk. Caught by a fixture test that edited an
+  outcome row and expected the replay to notice.
+
 ### Added (2026-07-29, BlueDot slices B2b and B5 through B9: the precommitted forecasting stage)
 
 * `state_audit/projection.py`: the fixed `1152 x 16` intervention projection. Generated once from

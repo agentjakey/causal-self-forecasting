@@ -204,3 +204,50 @@ temp/
 *.swo
 *~
 *.log
+
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+htmlcov/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Downloaded datasets and model caches
+data/raw/
+data/cache/
+.huggingface/
+**/.cache/
+
+# Generated experiment runs
+artifacts/runs/
+artifacts/tmp/
+results/runs/
+results/tmp/
+results/debug/
+
+# Logs and large numerical outputs
+*.log
+*.npy
+*.npz
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Local notebooks
+.ipynb_checkpoints/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -25,7 +25,13 @@ from causal_self_forecasting.calibration import plan as plan_module
 from causal_self_forecasting.calibration.plan import build_decision_record, load_calibration_plan
 from causal_self_forecasting.calibration.selection import select_calibration_ratio
 from causal_self_forecasting.cli import app
-from causal_self_forecasting.hashing import atomic_write_json, hash_file, read_jsonl, write_jsonl
+from causal_self_forecasting.hashing import (
+    atomic_write_json,
+    hash_file,
+    hash_object,
+    read_jsonl,
+    write_jsonl,
+)
 from causal_self_forecasting.interventions import direction_family as df
 from causal_self_forecasting.paths import (
     FORECAST_COMMITMENTS,
@@ -36,6 +42,8 @@ from causal_self_forecasting.paths import (
     STATE_AUDIT_OBSERVATIONS,
     STATE_AUDIT_PAIRING,
     STATE_AUDIT_PREDICTORS,
+    STATE_AUDIT_RATIO_SUMMARIES,
+    STATE_AUDIT_REFERENCE_NORM,
     STATE_AUDIT_RUN_MANIFEST,
     STATE_AUDIT_TRANSFORM_FITS,
     run_dir,
@@ -44,6 +52,7 @@ from causal_self_forecasting.schemas import (
     CalibrationCriterionResult,
     CalibrationRatioSummary,
     Framing,
+    LayerReferenceNormRecord,
     PromptVariant,
     Split,
     TaskItem,
@@ -51,6 +60,7 @@ from causal_self_forecasting.schemas import (
 from causal_self_forecasting.state_audit import predict as predict_module
 from causal_self_forecasting.state_audit import projection as projection_module
 from causal_self_forecasting.state_audit import run as run_module
+from causal_self_forecasting.state_audit.calibrate import MEDIAN_METHOD
 from causal_self_forecasting.tasks import loader as task_loader
 from causal_self_forecasting.tasks import prompt_manifest as pm
 
@@ -260,6 +270,28 @@ def _write_calibration_decision() -> None:
     directory = run_dir(CAL_RUN_ID)
     directory.mkdir(parents=True, exist_ok=True)
     atomic_write_json(directory / STATE_AUDIT_DECISION, decision.model_dump(mode="json"))
+
+    # The evidence behind the decision. A real calibration run writes these beside it, and the
+    # public bundle requires them, so the fixture writes them too rather than letting the bundle
+    # quietly treat them as optional.
+    atomic_write_json(
+        directory / STATE_AUDIT_RATIO_SUMMARIES,
+        {"summaries": [summary.model_dump(mode="json") for summary in summaries]},
+    )
+    prompt_ids = [f"{CAL_RUN_ID}_prompt_{index:02d}" for index in range(CAL_N)]
+    reference = LayerReferenceNormRecord(
+        layer=LAYER,
+        prompt_ids=prompt_ids,
+        prompt_identity_hash=hash_object(prompt_ids),
+        count=len(prompt_ids),
+        state_norms=dict.fromkeys(prompt_ids, REFERENCE_NORM),
+        reference_norm=REFERENCE_NORM,
+        median_method=MEDIAN_METHOD,
+        prompt_manifest_hash=plan.prompt_manifest_hash,
+        model_id=plan.model_id,
+        model_revision=plan.model_revision,
+    )
+    atomic_write_json(directory / STATE_AUDIT_REFERENCE_NORM, reference.model_dump(mode="json"))
 
 
 @pytest.fixture
@@ -1095,3 +1127,129 @@ def test_a_clean_only_run_is_refused_by_the_intervened_verifier(workspace: Works
     run_final_clean(workspace)
     with pytest.raises(StateAuditRunError, match="applied no intervention"):
         verify_run(FINAL_RUN_ID)
+
+
+# -- the public replay bundle -------------------------------------------------
+
+
+@pytest.fixture
+def bundled(analyzed, tmp_path: Path):
+    from causal_self_forecasting.state_audit.bundle import build_public_bundle
+
+    workspace, resolution, analysis = analyzed
+    destination = tmp_path / "public" / "fct-v0.1"
+    report = build_public_bundle(
+        {"final_test": FINAL_RUN_ID, "training": TRAIN_RUN_ID, "calibration": CAL_RUN_ID},
+        bundle_id="fct-v0.1",
+        destination=destination,
+    )
+    return workspace, resolution, analysis, destination, report
+
+
+def test_the_bundle_replays_on_its_own(bundled) -> None:
+    from causal_self_forecasting.state_audit.bundle import replay_bundle
+
+    *_, destination, _ = bundled
+    report = replay_bundle(destination)
+    assert report["valid"] is True
+    assert report["failures"] == []
+    assert report["checksums_valid"] is True
+    assert report["conditions_checked"] == RECORDS_PER_PROMPT
+    assert report["comparisons_checked"] == 2
+    assert report["bootstrap_resamples"] == 10_000
+
+
+def test_the_bundle_replay_matches_the_run_directory_replay(bundled) -> None:
+    """The published artifact must not be able to pass a weaker check than the run it came from."""
+    from causal_self_forecasting.state_audit.analyze import replay_analysis
+    from causal_self_forecasting.state_audit.bundle import replay_bundle
+
+    *_, destination, _ = bundled
+    from_bundle = replay_bundle(destination)
+    from_run = replay_analysis(FINAL_RUN_ID)
+    for field in ("analysis_hash", "conditions_checked", "comparisons_checked", "bootstrap_seed"):
+        assert from_bundle[field] == from_run[field], field
+    assert from_bundle["valid"] == from_run["valid"] is True
+
+
+def test_the_bundle_excludes_states_weights_and_pre_reveal_salts(bundled) -> None:
+    *_, destination, _ = bundled
+    published = {path.name for path in destination.rglob("*") if path.is_file()}
+    assert "state_audit_states.npz" not in published
+    assert "state_audit_state_refs.jsonl" not in published
+    assert not any(name.endswith(".salt") for name in published)
+    assert not any(
+        name.endswith((".npz", ".npy", ".pt", ".pth", ".ckpt", ".safetensors"))
+        for name in published
+    )
+    assert not (destination / "private_payloads").exists()
+
+
+def test_the_bundle_publishes_the_reveals_that_carry_the_salts(bundled) -> None:
+    """Post-reveal salts must ship: a commitment hash cannot be checked without its salt."""
+    *_, destination, _ = bundled
+    rows = list(read_jsonl(destination / "selection_reveals.jsonl"))
+    assert len(rows) == RECORDS_PER_PROMPT * FINAL_N
+    assert all(row["salt_hex"] for row in rows)
+    assert all(row["no_selection"] is True for row in rows)
+    assert all(row["selected_intervention_id"] is None for row in rows)
+
+
+def test_every_bundled_forecast_record_covers_all_candidates(bundled) -> None:
+    *_, destination, _ = bundled
+    rows = list(read_jsonl(destination / "forecasts.jsonl"))
+    assert len(rows) == RECORDS_PER_PROMPT * FINAL_N
+    for row in rows:
+        assert len(row["candidate_forecasts"]) == CANDIDATES_PER_PROMPT
+
+
+def test_an_edited_bundle_file_fails_the_checksums(bundled) -> None:
+    from causal_self_forecasting.state_audit.bundle import replay_bundle, verify_bundle
+
+    *_, destination, _ = bundled
+    target = destination / "state_audit_observations.jsonl"
+    rows = list(read_jsonl(target))
+    rows[0]["delta_clean_top_margin"] = float(rows[0]["delta_clean_top_margin"]) + 1.0
+    write_jsonl(target, rows)
+
+    assert verify_bundle(destination)["valid"] is False
+    report = replay_bundle(destination)
+    assert report["valid"] is False
+    assert report["checksums_valid"] is False
+
+
+def test_a_file_added_to_the_bundle_is_detected(bundled) -> None:
+    from causal_self_forecasting.state_audit.bundle import verify_bundle
+
+    *_, destination, _ = bundled
+    (destination / "extra_note.txt").write_text("added later", encoding="utf-8")
+    report = verify_bundle(destination)
+    assert report["valid"] is False
+    assert any("extra_note.txt" in failure for failure in report["failures"])
+
+
+def test_the_bundle_manifest_records_the_setting_and_the_exclusions(bundled) -> None:
+    from causal_self_forecasting.hashing import read_json
+
+    *_, destination, _ = bundled
+    manifest = read_json(destination / "bundle_manifest.json")
+    assert manifest["layer"] == LAYER
+    assert manifest["norm_ratio"] == SELECTED_RATIO
+    assert manifest["global_alpha"] == SELECTED_ALPHA
+    assert manifest["scientific_result"] is True
+    assert manifest["file_count"] == len(manifest["files"])
+    excluded = {entry["path"] for entry in manifest["excluded"]}
+    assert "state_audit_states.npz" in excluded
+    assert "private_payloads/salts/" in excluded
+
+
+def test_the_bundle_refuses_to_build_without_an_analysis(analyzed, tmp_path: Path) -> None:
+    from causal_self_forecasting.state_audit.bundle import BundleError, build_public_bundle
+
+    (run_dir(FINAL_RUN_ID) / "state_audit_analysis.json").unlink()
+    with pytest.raises(BundleError, match="missing"):
+        build_public_bundle(
+            {"final_test": FINAL_RUN_ID, "training": TRAIN_RUN_ID, "calibration": CAL_RUN_ID},
+            bundle_id="fct-v0.1",
+            destination=tmp_path / "public" / "fct-v0.1",
+        )

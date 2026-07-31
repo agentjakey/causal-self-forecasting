@@ -1,0 +1,531 @@
+% Workshop-style paper for the BlueDot state-dependence study.
+% Build: pdflatex main && bibtex main && pdflatex main && pdflatex main
+%
+% Every number in this document was read from a verified run artifact in
+% results/runs/bluedot-final-test/. Nothing here is estimated, rounded up, or reconstructed.
+% See ../REPORT.md for the long-form version and the exact verification command.
+
+\documentclass{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{natbib}
+\usepackage{hyperref}
+
+\hypersetup{colorlinks=true, linkcolor=black, citecolor=black, urlcolor=blue}
+
+\title{Testing Prompt-Specific Hidden-State Access for\\
+Intervention-Effect Forecasting:\\
+A Preregistered Null Result in Gemma 3 1B}
+
+\author{Jacob Ortiz}
+
+\date{July 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+We ask whether a language model's own hidden state carries information about the effect of an
+activation intervention beyond what is available from the prompt, the model's clean output
+distribution, and a complete numerical description of the intervention. On
+\texttt{google/gemma-3-1b-it} at a pinned revision, we add a fixed unit direction, scaled by a
+single global strength selected by preregistered calibration, to the layer-13 residual stream at
+the final prompt token, and measure the shift in the margin around the model's own clean preferred
+answer. Three ridge regressions are fitted on 96 training prompts and frozen: one seeing only a
+16-dimensional projection of the intervention vector, one additionally seeing the prompt and the
+clean logits, and one additionally seeing a 16-component PCA of the true hidden state together with
+its bilinear interaction with the intervention. All 512 prompt-level forecasts for 32 held-out
+prompts, each covering all 17 candidates, were committed under salted hashes before any final-test
+intervention was applied. On resolution (544 intervened forwards, zero failures, all 512
+commitments verified and revealed), we find \emph{no detected improvement under this setup} from
+state access: the paired difference in prompt-aggregated MAE between the visible-information and
+true-state models is $-0.013725$ with a 95\% interval of $[-0.025723, 0.00003]$ over 10{,}000
+paired bootstrap resamples across 32 prompt groups, and substituting a matched wrong state changes
+MAE by $0.005172$ with a 95\% interval of $[-0.003081, 0.013412]$. Both intervals cross zero, so
+both preregistered hypotheses are unsupported. The lowest point-estimate MAE is the
+intervention-only ridge's ($0.318821$). These are null results, not evidence of equivalence: the
+design had limited power at 32 prompt groups, and we do not claim the state carries no information.
+We describe the precommitment machinery that makes the null credible and argue that a strong
+visible-information baseline plus a matched wrong-state control is the minimum needed to make a
+positive result in this setting mean anything.
+\end{abstract}
+
+\section{Introduction}
+
+A recurring intuition in interpretability is that a model's internal state contains information
+about its own computation that an external observer cannot get from the outside. This paper tests a
+deliberately narrow, mechanical version of that intuition.
+
+Take a small instruction-tuned model answering a four-choice science question. At one layer, at the
+final prompt token, add a fixed unit vector to the residual stream and let the forward pass finish.
+Measure how far the margin around the model's own clean preferred answer moved. Then try to
+\emph{predict} that number in advance, for an intervention that has not been applied yet.
+
+Two predictors get the same job and the same complete numerical description of the intervention.
+Only one of them also sees the model's hidden state for that prompt. If the state-conditioned
+predictor wins, the residual stream carried something about the intervention's consequences that
+the visible channel did not. If it does not, then under this setup no improvement from state access
+was detected, which is weaker than showing there is none.
+
+Two things about the framing. First, this is an \emph{external state-information audit}: the
+predictors are ridge regressions that we fit and control. A ridge regression reading a residual
+stream is a readout, not a report, and the model is never asked about itself. Nothing here tests
+introspection, self-awareness, faithful verbal reasoning, hidden goals, or deployment readiness.
+Second, a win alone would not be enough, since a state-conditioned model might improve simply by
+having more parameters and more variance to exploit. What makes a win meaningful is substituting a
+\emph{different} prompt's state and checking that performance collapses.
+
+We preregistered both hypotheses, the target, the intervention strength grid, the permitted layers,
+the pass conditions, the aggregation unit, the number of bootstrap resamples, the seed, and the
+decision rule, all before any outcome existed:
+
+\begin{itemize}
+  \item \textbf{H-BD1.} The state-conditioned ridge achieves lower prompt-aggregated mean absolute
+        error than the visible-information ridge.
+  \item \textbf{H-BD2.} That advantage depends on the state belonging to the prompt being
+        predicted, so substituting a matched wrong state raises the error.
+\end{itemize}
+
+Neither is supported. The state-conditioned model's point-estimate MAE is higher than both
+baselines', and substituting a matched wrong state does not degrade it detectably. Our
+contributions are the benchmark and its integrity machinery, the strength of the baseline, the
+specificity control, and the null result itself.
+
+\section{Related Work}
+
+This study responds to work asking whether models have privileged access to facts about their own
+computation. \citet{li2025explain} fine-tune language models to describe, in natural language, the
+information their features encode, the causal structure of their internal activations, and the
+influence of input tokens on their outputs, and report that a model explaining its own computations
+generally outperforms a different model explaining them, even a more capable one. That asymmetry is
+the privileged-access claim our experiment probes, in a narrower and non-verbal form.
+
+The intervention mechanism comes from activation engineering: adding a direction to the residual
+stream at inference time to control the output \citep{turner2023activation}. We follow the mechanism
+but not its recipe for choosing directions. Where activation addition derives a steering vector from
+a contrast pair of prompts, our eight directions come from the pinned output embedding and a seeded
+random orthogonal complement, so a real steer and a matched control can be published to the
+predictors under identical metadata.
+
+The precommitment protocol adapts preregistration practice, whose purpose is to keep prediction
+distinct from postdiction by fixing the question and the analysis plan before outcomes are observed
+\citep{nosek2018preregistration}, to a setting where the ``outcome'' is a set of forward passes the
+experimenter can run at will. That is why the protocol here is enforced by salted hashes and refusal
+conditions in code rather than by a filed document.
+
+We want to be precise about what this study is \emph{not}. It is not a replication of any released
+explainer result: different model, different intervention family, different target, and predictors
+we fitted ourselves, which are external ridge regressions rather than a model trained to verbalize
+anything about itself. A direct reproduction using the released Qwen3-8B and Llama-3.1-8B explainer
+checkpoints and training code \citep{transluce2025introspectiveinterp} would be a separate
+experiment, and we did not attempt one.
+
+The task is ARC-Challenge \citep{clark2018arc}, the model is Gemma 3 1B instruction-tuned
+\citep{gemmateam2025gemma3, gemma3_1b_it}, and the implementation uses Transformers
+\citep{wolf2020transformers}, PyTorch \citep{paszke2019pytorch}, scikit-learn
+\citep{pedregosa2011scikit}, and NumPy \citep{harris2020numpy}.
+
+\section{Methods}
+
+\subsection{Setup}
+
+The model is \texttt{google/gemma-3-1b-it} at revision
+\texttt{dcc83ea841ab6100d6b47a070329e1ba4cf78752}, run on CPU in float32 with hidden dimension
+1152. Model revisions are typed to reject moving pointers such as \texttt{main}.
+
+The task is ARC-Challenge rendered as four-choice items under a single neutral prompt wrapper. A
+frozen split assigns 168 prompts to four disjoint roles: 8 smoke, 32 calibration, 96 training, and
+32 final test. It is drawn by a seeded permutation of 256 eligible ARC group ids, disjoint by item
+and by group, and selection never reads correctness, confidence, logits, or hidden states, so the
+split cannot have been chosen to suit a result.
+
+The target is $\Delta_{\text{margin}}$ (\texttt{delta\_clean\_top\_margin}): the shift in the margin
+around the model's \emph{own} clean preferred answer, held fixed after the intervention. Clean
+correctness against the dataset key does not enter the measurement.
+
+The intervention family is eight unit vectors: four centered answer-token unembedding directions
+and four seeded random controls orthogonal to their span and to each other. With both signs plus a
+no-op this gives 17 candidates per prompt.
+
+What is withheld from the predictors is the \emph{semantic label}, not the vector. A real
+answer-token steer and a matched random control are published with the same operation, layer,
+position, and strength, and an opaque identifier; the record type refuses an identifier naming a
+construction role, an answer label, or a family. The vector itself is fully available: every method
+receives $P^{\top} v$, a fixed 16-dimensional projection of the same vector added to the residual
+stream. A predictor can therefore tell directions apart numerically, and could in principle recover
+structure correlated with construction role. What it cannot do is read ``this is the steer toward
+answer B'' off the metadata and dismiss the controls without consulting anything else.
+
+The strength is a single \emph{global} alpha, $\alpha = r \cdot \tilde{n}$, where $\tilde{n}$ is
+the median clean state norm over the calibration prompts and $r$ is the selected ratio. It is
+deliberately not prompt-relative: if $\alpha$ depended on $\lVert h_{\text{prompt}} \rVert$, the
+visible-information baseline would silently receive the prompt's own state norm and the central
+comparison would be contaminated at the source.
+
+\subsection{Preregistered calibration}
+
+The calibration plan fixed the target, five ratios $\{0.02, 0.05, 0.10, 0.20, 0.40\}$, two permitted
+layers (13 primary, 20 fallback), and six pass conditions before any number existed. The run
+captured all clean states first, took the median norm as the reference, derived one alpha per
+ratio, then swept all 16 signed directions and one shared no-op per prompt: 2{,}624 forwards,
+2{,}592 observations, zero failures.
+
+The selector takes the \emph{smallest} passing ratio in preregistered order, never the largest
+effect, because choosing the stimulus by its outcome would make the comparison circular. Ratio
+$0.02$ was the smallest passing strength (Table~\ref{tab:calibration}), giving
+$\alpha = 106.87158268272867$. Ratios $0.10$, $0.20$, and $0.40$ each failed on exactly one
+condition, the preregistered p95 ceiling of $4.0$, at $5.22$, $11.08$, and $23.58$. Because layer 13
+produced a usable ratio, the layer-20 fallback was prohibited from running.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lr}
+\toprule
+Quantity at ratio 0.02, layer 13 & Value \\
+\midrule
+Non-no-op observations & 512 \\
+Failures & 0 \\
+Answer flips & 19 (3.71\%) \\
+Observations with $|\Delta_{\text{margin}}| \geq 0.10$ & 394 / 512 \\
+Median $|\Delta_{\text{margin}}|$ & 0.23317 \\
+p95 $|\Delta_{\text{margin}}|$ & 0.91024 \\
+Maximum $|$no-op target$|$ & exactly 0 \\
+\bottomrule
+\end{tabular}
+\caption{The selected calibration setting. Ratio 0.05 also passed every condition; 0.02 was
+selected because it is smaller, not because it scored better.}
+\label{tab:calibration}
+\end{table}
+
+One calibration diagnostic constrains what a positive result could have meant. At the selected
+strength, the four answer-token directions and the four random controls flipped the answer at
+nearly the same rate: 10/256 versus 9/256 (3.91\% versus 3.52\%), and 22/768 versus 23/768 in
+training. The answer-token directions are built from the unembedding, but at this strength they do
+not behave like a privileged causal handle relative to norm-matched random directions.
+
+\subsection{Predictors}
+
+Every method receives the same intervention block $P^{\top} v$, where $v$ is the 1152-dimensional
+intervention vector and $P$ is a fixed $1152 \times 16$ projection generated once from the master
+seed, never fitted, and cited by hash from every forecast. The four blocks are:
+
+\begin{itemize}
+  \item \textbf{Intervention} (16): $P^{\top} v$, identical across every method.
+  \item \textbf{Visible} (39): four centered clean answer logits, clean top margin, clean entropy,
+        prompt token count, and 32 train-only TF-IDF plus truncated-SVD components of the prompt
+        text. Contains no state-derived quantity.
+  \item \textbf{State} (16): train-only PCA of the 1152-dimensional clean residual stream.
+  \item \textbf{Interaction} (256): flattened outer product of the state and intervention blocks.
+\end{itemize}
+
+Ridge penalties were selected by six-fold grouped cross-validation over a fixed eight-point grid,
+grouping by prompt (Table~\ref{tab:predictors}). The TF-IDF vectorizer, the SVD, the state PCA, and
+the feature standardizer were fitted on the 96 training prompts only, over 1{,}536 rows; each fit
+record carries the prompt ids it saw and a hash of that list, and cannot be constructed with a fit
+role other than \texttt{training}. Two model-free diagnostics locate the floor: a \textbf{constant}
+predictor emitting the training mean, and a \textbf{prompt lexical} predictor regressing on
+bag-of-words features that never sees the intervention.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+Method & Dim. & Ridge $\lambda$ & Training-fold CV MAE \\
+\midrule
+Intervention-only ridge   &  16 &   100 & 0.338847 \\
+Visible-information ridge &  55 &  1000 & 0.343321 \\
+State bilinear ridge      & 327 & 10000 & 0.361691 \\
+\bottomrule
+\end{tabular}
+\caption{Frozen predictors. The state bilinear model selected the largest penalty on the grid, a
+grid-edge selection recorded as such: cross-validation wanted more regularization than the grid
+offered.}
+\label{tab:predictors}
+\end{table}
+
+\subsection{Specificity controls}
+
+For each final-test prompt, a donor state is chosen deterministically from the other 31 final-test
+prompts: the nearest by clean top margin and clean entropy, restricted to donors sharing the model's
+clean preferred label. No prompt is its own donor; all 32 matches share the preferred label; the
+median margin distance to a donor is $0.27$. Matching makes the substitution hard to detect for the
+wrong reason, because an arbitrary donor state would differ in gross, easily separable ways.
+
+Ten additional conditions apply seeded derangements over the 32 prompts, giving an empirical band
+for what a state-conditioned model scores when the state is wrong on purpose.
+
+Substitution changes \emph{only} the state and interaction blocks. The intervention and visible
+blocks are byte-identical to the true-state condition, so any difference is attributable to the
+state alone.
+
+\subsection{Precommitment and resolution}
+
+Before any final-test intervention ran, the 32 final-test prompts went through a clean-only stage:
+32 clean forwards, zero interventions, capturing clean logits and layer-13 states. That stage's
+manifest carries \texttt{intervention\_count} as a typed literal zero.
+
+All predictors and transforms were then frozen and every forecast committed. There are 512
+commitment records: one for each of 16 method-and-condition combinations on each of 32 prompts (32
+each for constant, lexical, intervention-only, visible, true state, and matched wrong state; 320 for
+the ten shuffled conditions). \textbf{Each record covers all 17 candidates for its prompt}, carrying
+a predicted margin shift, a 5--95 interval, and a flip probability per candidate, so the 512 records
+seal $512 \times 17 = 8{,}704$ candidate-level predictions. Nothing was committed per candidate and
+scored per prompt, or the reverse.
+
+Each commitment is a salted hash keyed by trial, method, state condition, and condition index. The
+salts come from the OS CSPRNG and live in a private directory excluded from version control and from
+the published bundle. They are secret only until resolution: each reveal publishes its
+\texttt{salt\_hex}, because a commitment hash cannot be checked without it. What matters is
+ordering, not permanent secrecy. Before resolution, knowing a salt would have let a forecast be
+rewritten to match an outcome; after resolution, publishing it is what makes the commitment
+auditable.
+
+The committer refuses to run if any outcome artifact exists; the resolver refuses to run if any
+reveal exists. Because every candidate is applied, every reveal is a \emph{no-selection} reveal: all
+512 carry \texttt{no\_selection} true and a null selected candidate.
+
+Resolution refuses to start unless the working tree is clean and the implementation commit is
+recorded inside the hashed manifest; unless layer, ratio, and alpha match the calibration decision
+exactly; unless there are exactly 32 prompts, 512 verified commitments, and zero reveals; and unless
+no outcome artifact exists. Table~\ref{tab:integrity} records what it did.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lr}
+\toprule
+Integrity check & Result \\
+\midrule
+Prompts & 32 / 32 \\
+Intervened forwards & 544 / 544 \\
+Clean forwards during resolution & 0 \\
+Failures & 0 \\
+Commitments verified and revealed & 512 / 512 \\
+Every commitment predates every outcome & yes \\
+Maximum $|$no-op target$|$ & exactly 0 \\
+Maximum intervention reconstruction error & exactly 0 \\
+Realized answer flips & 6 \\
+Working tree at resolution & clean, commit \texttt{aac5532}, branch \texttt{main} \\
+\bottomrule
+\end{tabular}
+\caption{Final-test integrity. No clean forward ran during resolution: clean logits and states were
+reused from the clean stage, so every delta is measured against exactly the baseline the forecasts
+were made against. Every stored target was independently recomputed from its own logits.}
+\label{tab:integrity}
+\end{table}
+
+\subsection{Analysis}
+
+Absolute errors are averaged \emph{within each prompt first}, over that prompt's 16 non-no-op
+interventions, and then across the 32 prompts. This was fixed in advance because the 16
+interventions on one prompt share a question and a state.
+
+Both primary comparisons use 10{,}000 paired bootstrap resamples over the 32 prompt groups with the
+frozen seed 1394099119. Each replicate draws one set of prompt groups and evaluates both methods on
+that same set. The decision rule, fixed before the data existed: a comparison supports its
+hypothesis only if the 95\% paired interval excludes zero in the hypothesized direction. An interval
+crossing zero is reported as no detected difference, never as a trend.
+
+\section{Results}
+
+Scoring used the sealed forecasts and the verified outcomes. Nothing was fitted, refitted, tuned, or
+dropped. Table~\ref{tab:main} gives the main result; Figure~\ref{fig:mae} plots it against the
+shuffled-state band.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+Method & MAE & RMSE & Sign acc. & Spearman & Top-effect acc. \\
+\midrule
+Intervention-only ridge   & \textbf{0.318821} & 0.402262 & 0.630859 & 0.357776 & 0.34375 \\
+Visible-information ridge & 0.321518 & 0.404996 & 0.630859 & 0.353763 & 0.34375 \\
+True-state bilinear ridge & 0.335244 & 0.421573 & 0.580078 & 0.296136 & 0.12500 \\
+Matched wrong-state ridge & 0.340416 & 0.426767 & 0.566406 & 0.183944 & 0.06250 \\
+Constant                  & 0.347682 & 0.433596 & 0.560547 & 0.056294 & 0.12500 \\
+Prompt lexical            & 0.347937 & 0.434402 & 0.552734 & 0.057504 & 0.12500 \\
+\bottomrule
+\end{tabular}
+\caption{Final-test performance, 32 prompts and 512 signed pairs per row. All values are point
+estimates; only the two comparisons in Section~\ref{sec:primary} carry intervals, so differences
+between rows that are not tested there are not established as differences.}
+\label{tab:main}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.78\textwidth]{figures/final_test_mae_by_method.png}
+\caption{Prompt-aggregated MAE by method and state condition. The vertical band spans the ten
+shuffled-state controls.}
+\label{fig:mae}
+\end{figure}
+
+\subsection{Primary comparisons}
+\label{sec:primary}
+
+\paragraph{H-BD1: visible minus true-state MAE.}
+Point estimate $-0.013725$, 95\% interval $[-0.025723, 0.00003]$. The interval crosses zero, so
+\textbf{H-BD1 is not supported}. The point estimate also has the wrong sign for the hypothesis: the
+visible model's point-estimate MAE is the lower of the two. The upper endpoint is small but
+positive, not zero; we write it as $0.00003$ rather than $0.0000$ so that it is not read as an
+interval that terminates exactly at zero.
+
+\paragraph{H-BD2: matched wrong-state minus true-state MAE.}
+Point estimate $0.005172$, with a 95\% interval of $[-0.003081, 0.013412]$. The interval crosses
+zero, so \textbf{H-BD2 is not supported}.
+
+Both are shown in Figure~\ref{fig:primary}. Under the preregistered decision rule these are null
+results: no improvement from state access was detected under this setup, and no dependence on the
+state being the right one was detected. We do not describe either as a trend, and neither is a
+demonstration of equivalence. An interval that crosses zero is consistent with a small true effect
+in either direction, and with 32 prompt groups this design has limited power to resolve one.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.78\textwidth]{figures/final_test_primary_comparisons.png}
+\caption{Both primary comparisons with 95\% paired bootstrap intervals over 32 prompt groups,
+10{,}000 resamples, seed 1394099119. Both intervals cross zero.}
+\label{fig:primary}
+\end{figure}
+
+\subsection{Shuffled-state band and Brier score}
+
+The ten seeded derangements, scored without refitting, give MAE mean $0.339221$, median $0.339280$,
+minimum $0.335087$, maximum $0.342696$. The true-state MAE of $0.335244$ falls at the lower edge of
+this range and the matched wrong-state MAE of $0.340416$ falls inside it.
+
+This band is \textbf{descriptive only}. It is the spread of ten point estimates over ten seeds, not
+a null distribution, not a confidence interval, and not a test: the derangements were not drawn to
+support an inference, no interval was preregistered for them, and ten values give no useful tail.
+It is reported because a reader should be able to see where the true-state score sits relative to
+deliberately wrong states, and it is consistent with the H-BD2 result, but no conclusion rests on
+it.
+
+The Brier score is omitted. Only 6 answer flips occurred across all 512 final-test interventions,
+below the preregistered floor of 20. The floor is enforced in the record type: a summary carrying a
+Brier score over fewer than 20 flips cannot be constructed.
+
+\subsection{Interpretation}
+
+In this preregistered Gemma 3 1B experiment there was \textbf{no detected improvement under this
+setup} from prompt-specific hidden-state features, over and above intervention and visible-output
+information. The intervention-only ridge had the lowest point-estimate MAE, and replacing the true
+hidden state with matched or shuffled states caused no statistically detected degradation.
+
+Three things this does not say. It does not say the methods are equivalent: no equivalence test was
+preregistered or run, and an interval crossing zero is not evidence of no effect. It does not say
+the state-conditioned model is worse; its point estimate is higher, but the one interval we computed
+for that contrast includes zero. And it does not say hidden states carry no information about
+intervention effects, which is a claim about the model rather than about this readout.
+
+The higher point estimate, with the training-fold diagnostics, is \emph{consistent with} the
+bilinear representation adding variance or overfitting: 327 features against 55 and 16, the worst
+cross-validated error of the three, and a grid-edge selection of the largest available penalty. That
+is a reading of a pattern in point estimates, not a confirmed mechanism and not a tested comparison.
+This study cannot distinguish ``the state carries nothing'' from ``this representation of the state
+cannot expose what it carries,'' and only the weaker claim is supported.
+
+\section{Limitations}
+
+One model (\texttt{google/gemma-3-1b-it} at one pinned revision, one billion parameters), one layer
+(13; the preregistered layer-20 fallback was prohibited because layer 13 produced a usable ratio),
+one task family (ARC-Challenge under a single neutral wrapper), and 32 final-test prompts. Because
+the primary unit is the prompt, the primary analysis has 32 units and correspondingly wide
+intervals, with limited power against a small true effect. No power analysis was preregistered and
+no equivalence bound was set, so a null here bounds what this design could resolve, not what is
+there.
+
+The predictors are linear ridges, excluded from nonlinearity by design to keep the comparison
+interpretable; a nonlinear predictor might extract state information a ridge cannot. The state
+entered as 16 principal components fitted on 96 training prompts, so whatever those prompts did not
+span is not in the representation. Only six answer flips occurred, making flip-based metrics
+uninformative.
+
+Two design-level caveats matter most. The intervention-only representation may already contain most
+of the predictable signal: it had the lowest point-estimate MAE, and if these directions act largely
+prompt-independently there is little residual variance for state information to explain. And the
+answer-token directions did not outperform norm-matched random controls in flip rate at the selected
+strength, so the intervention family may not be causally privileged enough to make state
+conditioning useful.
+
+On provenance: the smoke, calibration, training, and final-test clean stages each recorded a dirty
+working tree alongside the commit they ran from. Resolution and analysis ran from a clean tree at
+commit \texttt{aac5532}, and the resolver refuses a dirty tree. All artifacts are internally
+hash-verified and the chain is checkable end to end, but the exact source state of the earlier runs
+is not recoverable from a commit alone.
+
+We make no claims about introspection, consciousness, faithful reasoning, hidden goals, or larger
+models. None were measured.
+
+\section{Conclusion}
+
+We built a precommitted causal forecasting benchmark, ran it once, and got a null. Under this
+setup, access to a model's correct prompt-specific hidden state produced no detected improvement in
+predicting an activation intervention's effect beyond the prompt, the clean output distribution, and
+a numerical description of the intervention, and removing the correctness of that state did not
+detectably hurt. Both statements are about what this experiment could resolve, not about what is
+there to find.
+
+The negative result is worth reporting mainly because of what surrounds it. The baseline is strong
+on purpose: it receives the prompt, the clean logits, and the same intervention encoding, and the
+intervention strength is global precisely so no state norm leaks into it. A weaker baseline would
+have made the state look informative. The specificity control is mandatory rather than optional and
+is scored without refitting. And the ordering of forecast before outcome is proved from hashes and
+timestamps on disk rather than asserted, re-provable at any time by a model-free replay.
+
+Hidden-state access alone does not guarantee improved intervention forecasting. Future work should
+reproduce calibration from a clean commit, extend to larger models and other layers, compare learned
+continuous-token explainers against these baselines, improve the state representation without tuning
+on this now-spent final test, and attempt a direct reproduction with released Qwen or Llama
+checkpoints and datasets.
+
+\section*{Data, Code, and Artifact Availability}
+
+Everything needed to check the result without a GPU, without the model weights, and without the
+hidden states is published.
+
+\paragraph{Public replay bundle.} \texttt{results/public/bluedot-v0.1/} holds 21 files: the analysis
+of record, the resolution manifest, the aggregated and pair-level score tables, all 512 sealed
+forecasts, their commitments, all 512 reveals with their salts, the frozen calibration decision and
+its evidence, transform and predictor fit provenance, both figures, a bundle manifest, and
+\texttt{CHECKSUMS.sha256} in the format \texttt{sha256sum -c} accepts. It replays on its own:
+
+\begin{quote}\ttfamily\small
+csf state-audit replay-bundle -{}-bundle results/public/bluedot-v0.1
+\end{quote}
+
+\noindent This verifies every checksum, then recomputes all 16 condition summaries and both primary
+comparisons from the bundle's own forecasts and outcomes, reporting \texttt{valid: true} with zero
+failures at analysis hash
+
+\begin{quote}\ttfamily\small
+sha256:46e88d3a629c78009787f88fadc5c821e8c318e3ee301923a236171cde1ece4d
+\end{quote}
+
+\noindent It reads nothing outside the bundle and runs through the same function the run directory
+uses, so the published artifact cannot pass a weaker check than the run it came from. It hashes the
+outcomes file rather than trusting a hash recorded beside it, so an edited outcome fails.
+
+\paragraph{Frozen protocol.} \texttt{protocol/} holds the preregistration, the execution decision
+tree, and the prompt, direction, and calibration manifests, each recovered byte for byte from the
+commit that created it, with git blob hashes and commit dates recorded. The preregistration was
+committed once and never modified.
+
+\paragraph{Not published.} Model weights (Gemma remains under Google's license), the layer-13
+residual-stream arrays, and the pre-reveal salt directory. Code, frozen manifests, and the bundle
+are MIT licensed.
+
+{\small
+\bibliographystyle{plainnat}
+\bibliography{references}
+}
+
+\end{document}

@@ -36,11 +36,13 @@ from ..paths import (
     STATE_AUDIT_OBSERVATIONS,
     STATE_AUDIT_PAIR_SCORES,
     STATE_AUDIT_PROMPT_SCORES,
+    STATE_AUDIT_RESOLUTION,
     run_dir,
 )
 from ..reproducibility import derive_seed, environment_snapshot, git_state
 from ..schemas import (
     FinalTestAnalysisRecord,
+    FinalTestResolutionManifest,
     ForecastRecord,
     MethodConditionSummary,
     PairedComparison,
@@ -120,10 +122,23 @@ class ScoredCondition:
 
 
 def read_observations(run_id: str) -> list[StateAuditObservationRecord]:
-    path = run_dir(run_id) / STATE_AUDIT_OBSERVATIONS
+    return read_observations_at(run_dir(run_id))
+
+
+def read_observations_at(directory: Path) -> list[StateAuditObservationRecord]:
+    """Read outcomes from any directory holding them, a run directory or a public bundle."""
+    path = directory / STATE_AUDIT_OBSERVATIONS
     if not path.exists():
         raise AnalysisError(f"no outcomes at {path}; the final test has not been resolved")
     return [StateAuditObservationRecord.model_validate(row) for row in read_jsonl(path)]
+
+
+def read_forecasts_at(directory: Path) -> list[ForecastRecord]:
+    """Read sealed forecasts from any directory holding them."""
+    path = directory / FORECASTS
+    if not path.exists():
+        raise AnalysisError(f"no forecasts at {path}")
+    return [ForecastRecord.model_validate(row) for row in read_jsonl(path)]
 
 
 def score_conditions(
@@ -658,20 +673,32 @@ def analysis_report(
 
 
 def replay_analysis(run_id: str) -> dict[str, Any]:
-    """Recompute the analysis from artifacts and compare it to the stored record. Loads no model.
+    """Recompute the analysis from a run directory and compare it to the stored record."""
+    return replay_from_directory(run_dir(run_id), source=run_id)
+
+
+def replay_from_directory(directory: Path, *, source: str) -> dict[str, Any]:
+    """Recompute the analysis from any directory of artifacts. Loads no model.
 
     The model-free replay a third party runs. It recomputes every summary and both comparisons from
     the forecasts and outcomes on disk and checks them against what was written, so a stored
     analysis that does not follow from its own inputs is detectable without rerunning the model.
+
+    Directory-based rather than run-id-based so that the published bundle replays through exactly
+    this function. A separate reimplementation for the public bundle could agree with the stored
+    analysis while disagreeing with the code that produced it, which is the failure a replay exists
+    to catch.
     """
-    directory = run_dir(run_id)
     analysis_path = directory / STATE_AUDIT_ANALYSIS
     if not analysis_path.exists():
         raise AnalysisError(f"no analysis to replay at {analysis_path}")
     from ..hashing import read_json
 
     stored = FinalTestAnalysisRecord.model_validate(read_json(analysis_path))
-    resolution = load_resolution_manifest(run_id)
+    resolution_path = directory / STATE_AUDIT_RESOLUTION
+    if not resolution_path.exists():
+        raise AnalysisError(f"no final-test resolution at {resolution_path}")
+    resolution = FinalTestResolutionManifest.model_validate(read_json(resolution_path))
     failures: list[str] = []
 
     # Hash the files on disk, not the values two records happen to agree on. Comparing the
@@ -698,7 +725,7 @@ def replay_analysis(run_id: str) -> dict[str, Any]:
     if resolution.manifest_hash != stored.resolution_manifest_hash:
         failures.append("the resolution manifest does not match the hash the analysis cites")
 
-    scored = score_conditions(read_forecasts(run_id), read_observations(run_id))
+    scored = score_conditions(read_forecasts_at(directory), read_observations_at(directory))
     recomputed = {
         (s.method_id, s.state_condition, s.condition_index): s
         for s in (summarize_condition(entry) for entry in scored.values())
@@ -736,7 +763,8 @@ def replay_analysis(run_id: str) -> dict[str, Any]:
             failures.append(f"{name}: the decision does not recompute")
 
     return {
-        "run_id": run_id,
+        "run_id": source,
+        "source_directory": str(directory),
         "analysis_id": stored.analysis_id,
         "analysis_hash": stored.analysis_hash,
         "conditions_checked": len(stored.method_summaries),
@@ -768,8 +796,11 @@ __all__ = [
     "analyze_report_paths",
     "compare",
     "permutation_band",
+    "read_forecasts_at",
     "read_observations",
+    "read_observations_at",
     "replay_analysis",
+    "replay_from_directory",
     "score_conditions",
     "summarize_condition",
 ]

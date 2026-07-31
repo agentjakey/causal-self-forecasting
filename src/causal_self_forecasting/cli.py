@@ -29,6 +29,7 @@ from .hashing import atomic_write_json
 from .logging_utils import configure_logging, info
 from .paths import RUN_LOG, ensure_run_dir, new_run_id, run_dir
 from .schemas import Split
+from .state_audit.bundle import BUNDLE_ID
 
 app = typer.Typer(
     name="csf",
@@ -1022,6 +1023,78 @@ def state_audit_replay_analysis(
     if not report["valid"]:
         typer.secho(
             f"the stored analysis does not recompute: {report['failures']}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
+@state_audit_app.command("publish-bundle")
+def state_audit_publish_bundle(
+    final_test_run_id: str = typer.Option(
+        ..., "--final-test-run-id", help="The resolved and analyzed final-test run."
+    ),
+    training_run_id: str = typer.Option(
+        ..., "--training-run-id", help="The training run holding the fit provenance."
+    ),
+    calibration_run_id: str = typer.Option(
+        ..., "--calibration-run-id", help="The calibration run holding the strength decision."
+    ),
+    bundle_id: str = typer.Option(BUNDLE_ID, "--bundle-id", help="Bundle directory name."),
+    output: Path | None = typer.Option(None, "--output", help="Write the report to a file."),
+) -> None:
+    """Copy the allowlisted artifacts into a public replay bundle. Loads no model.
+
+    Publishes the analysis, resolution manifest, score tables, sealed forecasts, commitments,
+    reveals, calibration decision, fit provenance, and figures, with a checksum manifest. Model
+    weights, residual-stream arrays, and the pre-reveal salt files are never published; the
+    post-reveal salts travel inside the reveals, because a commitment hash cannot be checked
+    without its salt.
+    """
+    from .state_audit.bundle import BundleError, build_public_bundle
+
+    try:
+        report = build_public_bundle(
+            {
+                "final_test": final_test_run_id,
+                "training": training_run_id,
+                "calibration": calibration_run_id,
+            },
+            bundle_id=bundle_id,
+        )
+    except BundleError as error:
+        typer.secho(f"could not build the bundle: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+    if output is not None:
+        atomic_write_json(output, report)
+
+
+@state_audit_app.command("replay-bundle")
+def state_audit_replay_bundle(
+    bundle_path: Path = typer.Option(..., "--bundle", help="Path to the public bundle directory."),
+    output: Path | None = typer.Option(None, "--output", help="Write the report to a file."),
+) -> None:
+    """Verify a public bundle's checksums and replay its analysis. Loads no model.
+
+    The check a third party runs against the published bundle alone: nothing outside the bundle is
+    read, and the recomputation goes through the same function the run directory uses.
+    """
+    from .state_audit.bundle import BundleError, replay_bundle
+
+    try:
+        report = replay_bundle(bundle_path)
+    except BundleError as error:
+        typer.secho(f"bundle replay failed: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+    if output is not None:
+        atomic_write_json(output, report)
+    if not report["valid"]:
+        typer.secho(
+            f"the published bundle does not verify: {report['failures']}",
             fg=typer.colors.RED,
             err=True,
         )

@@ -1,0 +1,210 @@
+% References for "Hidden-State Access Does Not Improve Intervention-Effect Forecasting in a
+% 1B Instruction-Tuned Model".
+%
+% POLICY FOR THIS FILE
+% Every entry below was checked against an authoritative source: the arXiv abstract page, the
+% Crossref record for the DOI, the publisher's own page, or the project's official repository.
+% The verification source is named in the comment above each entry. Nothing here was
+% reconstructed from memory, and no entry should be added without checking it the same way.
+
+% ---------------------------------------------------------------------------
+% Privileged access and introspective interpretability
+% ---------------------------------------------------------------------------
+
+% Verified against https://arxiv.org/abs/2511.08579 (title, author list, dates, DOI, subject
+% classes, comment field) and against the BibTeX block in the official repository README at
+% https://github.com/TransluceAI/introspective-interp. Submitted 2025-11-11; latest version v3,
+% 2026-02-09. The arXiv comment records no venue, so this is cited as a preprint.
+@misc{li2025explain,
+  title         = {{Training Language Models to Explain Their Own Computations}},
+  author        = {Li, Belinda Z. and Guo, Zifan Carl and Huang, Vincent and
+                   Steinhardt, Jacob and Andreas, Jacob},
+  year          = {2025},
+  eprint        = {2511.08579},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL},
+  doi           = {10.48550/arXiv.2511.08579},
+  url           = {https://arxiv.org/abs/2511.08579}
+}
+
+% The released explainer checkpoints and training code accompanying the paper above. Verified by
+% reading the official repository, which documents trained explainer weights published under the
+% Transluce organization on Hugging Face for feature descriptions, activation patching
+% (Qwen3-8B explaining Qwen3-8B, Llama-3.1-8B explaining Llama-3.1-8B), and input ablations
+% (Qwen3-8B and Llama-3.1-8B-Instruct), together with the training entry point.
+@misc{transluce2025introspectiveinterp,
+  title        = {{introspective-interp}: Code, Data, and Explainer Checkpoints for
+                  {Training Language Models to Explain Their Own Computations}},
+  author       = {Li, Belinda Z. and Guo, Zifan Carl and Huang, Vincent and
+                  Steinhardt, Jacob and Andreas, Jacob},
+  year         = {2025},
+  howpublished = {Software repository, Transluce AI},
+  note         = {Explainer checkpoints released on the Hugging Face Hub under the
+                  \texttt{Transluce} organization},
+  url          = {https://github.com/TransluceAI/introspective-interp}
+}
+
+% ---------------------------------------------------------------------------
+% Activation steering
+% ---------------------------------------------------------------------------
+
+% Verified against https://arxiv.org/abs/2308.10248. Note the current title is "Steering Language
+% Models With Activation Engineering"; the widely cited earlier title was "Activation Addition:
+% Steering Language Models Without Optimization". Submitted 2023-08-20; latest version v5,
+% 2024-10-10. No venue is recorded in the arXiv comment field.
+@misc{turner2023activation,
+  title         = {{Steering Language Models With Activation Engineering}},
+  author        = {Turner, Alexander Matt and Thiergart, Lisa and Leech, Gavin and
+                   Udell, David and Vazquez, Juan J. and Mini, Ulisse and MacDiarmid, Monte},
+  year          = {2023},
+  eprint        = {2308.10248},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL},
+  doi           = {10.48550/arXiv.2308.10248},
+  url           = {https://arxiv.org/abs/2308.10248}
+}
+
+% ---------------------------------------------------------------------------
+% Preregistration methodology
+% ---------------------------------------------------------------------------
+
+% Verified against the Crossref record for 10.1073/pnas.1708274114: title, four authors, journal,
+% volume 115, issue 11, pages 2600-2606, published 2018-03-12, National Academy of Sciences.
+@article{nosek2018preregistration,
+  title     = {{The preregistration revolution}},
+  author    = {Nosek, Brian A. and Ebersole, Charles R. and DeHaven, Alexander C. and
+               Mellor, David T.},
+  journal   = {Proceedings of the National Academy of Sciences},
+  volume    = {115},
+  number    = {11},
+  pages     = {2600--2606},
+  year      = {2018},
+  publisher = {National Academy of Sciences},
+  doi       = {10.1073/pnas.1708274114},
+  url       = {https://doi.org/10.1073/pnas.1708274114}
+}
+
+% ---------------------------------------------------------------------------
+% Model and task
+% ---------------------------------------------------------------------------
+
+% Verified against https://arxiv.org/abs/2503.19786. Author string on the arXiv page begins
+% "Gemma Team: Aishwarya Kamath, Johan Ferret, ..." and lists 156 authors; cited here as the
+% corporate author, which is how the report itself is attributed.
+@misc{gemmateam2025gemma3,
+  title         = {{Gemma 3 Technical Report}},
+  author        = {{Gemma Team, Google DeepMind}},
+  year          = {2025},
+  eprint        = {2503.19786},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL},
+  doi           = {10.48550/arXiv.2503.19786},
+  url           = {https://arxiv.org/abs/2503.19786}
+}
+
+% The specific weights this study ran against. The repository pins a model revision, not a paper,
+% so the revision is recorded here and the technical report is cited separately above.
+@misc{gemma3_1b_it,
+  title        = {{gemma-3-1b-it}},
+  author       = {{Google}},
+  year         = {2025},
+  howpublished = {Model weights, Hugging Face Hub},
+  note         = {Revision \texttt{dcc83ea841ab6100d6b47a070329e1ba4cf78752}},
+  url          = {https://huggingface.co/google/gemma-3-1b-it}
+}
+
+% Verified against https://arxiv.org/abs/1803.05457: title, seven authors, submitted 2018-03-14,
+% v1 only. Used in this study as the Hugging Face dataset allenai/ai2_arc, configuration
+% ARC-Challenge, as recorded in configs/tasks/arc_mcq.yaml.
+@misc{clark2018arc,
+  title         = {{Think you have Solved Question Answering? Try ARC, the AI2 Reasoning Challenge}},
+  author        = {Clark, Peter and Cowhey, Isaac and Etzioni, Oren and Khot, Tushar and
+                   Sabharwal, Ashish and Schoenick, Carissa and Tafjord, Oyvind},
+  year          = {2018},
+  eprint        = {1803.05457},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.AI},
+  doi           = {10.48550/arXiv.1803.05457},
+  url           = {https://arxiv.org/abs/1803.05457}
+}
+
+% ---------------------------------------------------------------------------
+% Software stack, versions taken from the recorded run environment
+% ---------------------------------------------------------------------------
+
+% Verified against the Crossref record for 10.18653/v1/2020.emnlp-demos.6: 22 authors, ACL,
+% pages 38-45, 2020.
+@inproceedings{wolf2020transformers,
+  title     = {{Transformers: State-of-the-Art Natural Language Processing}},
+  author    = {Wolf, Thomas and Debut, Lysandre and Sanh, Victor and Chaumond, Julien and
+               Delangue, Clement and Moi, Anthony and Cistac, Pierric and Rault, Tim and
+               Louf, Remi and Funtowicz, Morgan and Davison, Joe and Shleifer, Sam and
+               von Platen, Patrick and Ma, Clara and Jernite, Yacine and Plu, Julien and
+               Xu, Canwen and Le Scao, Teven and Gugger, Sylvain and Drame, Mariama and
+               Lhoest, Quentin and Rush, Alexander},
+  booktitle = {Proceedings of the 2020 Conference on Empirical Methods in Natural Language
+               Processing: System Demonstrations},
+  pages     = {38--45},
+  year      = {2020},
+  publisher = {Association for Computational Linguistics},
+  doi       = {10.18653/v1/2020.emnlp-demos.6},
+  note      = {Version 5.14.0 recorded in the run environment}
+}
+
+% Verified against https://arxiv.org/abs/1912.01703: 21 authors, submitted 2019-12-03, arXiv
+% comment records "NeurIPS 2019".
+@inproceedings{paszke2019pytorch,
+  title     = {{PyTorch: An Imperative Style, High-Performance Deep Learning Library}},
+  author    = {Paszke, Adam and Gross, Sam and Massa, Francisco and Lerer, Adam and
+               Bradbury, James and Chanan, Gregory and Killeen, Trevor and Lin, Zeming and
+               Gimelshein, Natalia and Antiga, Luca and Desmaison, Alban and K\"{o}pf, Andreas and
+               Yang, Edward and DeVito, Zach and Raison, Martin and Tejani, Alykhan and
+               Chilamkurthy, Sasank and Steiner, Benoit and Fang, Lu and Bai, Junjie and
+               Chintala, Soumith},
+  booktitle = {Advances in Neural Information Processing Systems 32 (NeurIPS 2019)},
+  year      = {2019},
+  doi       = {10.48550/arXiv.1912.01703},
+  url       = {https://arxiv.org/abs/1912.01703},
+  note      = {Version 2.13.0+cpu recorded in the run environment}
+}
+
+% Verified against the publisher page https://www.jmlr.org/papers/v12/pedregosa11a.html:
+% 16 authors, JMLR volume 12, issue 85, pages 2825-2830, 2011.
+@article{pedregosa2011scikit,
+  title   = {{Scikit-learn: Machine Learning in Python}},
+  author  = {Pedregosa, Fabian and Varoquaux, Ga\"{e}l and Gramfort, Alexandre and
+             Michel, Vincent and Thirion, Bertrand and Grisel, Olivier and Blondel, Mathieu and
+             Prettenhofer, Peter and Weiss, Ron and Dubourg, Vincent and Vanderplas, Jake and
+             Passos, Alexandre and Cournapeau, David and Brucher, Matthieu and Perrot, Matthieu
+             and Duchesnay, \'{E}douard},
+  journal = {Journal of Machine Learning Research},
+  volume  = {12},
+  number  = {85},
+  pages   = {2825--2830},
+  year    = {2011},
+  url     = {https://www.jmlr.org/papers/v12/pedregosa11a.html},
+  note    = {Version 1.9.0 recorded in the run environment}
+}
+
+% Verified against the Crossref record for 10.1038/s41586-020-2649-2: 26 authors, Nature,
+% volume 585, issue 7825, pages 357-362, published 2020-09-16.
+@article{harris2020numpy,
+  title     = {{Array programming with NumPy}},
+  author    = {Harris, Charles R. and Millman, K. Jarrod and van der Walt, St\'{e}fan J. and
+               Gommers, Ralf and Virtanen, Pauli and Cournapeau, David and Wieser, Eric and
+               Taylor, Julian and Berg, Sebastian and Smith, Nathaniel J. and Kern, Robert and
+               Picus, Matti and Hoyer, Stephan and van Kerkwijk, Marten H. and Brett, Matthew and
+               Haldane, Allan and Fern\'{a}ndez del R\'{i}o, Jaime and Wiebe, Mark and
+               Peterson, Pearu and G\'{e}rard-Marchant, Pierre and Sheppard, Kevin and
+               Reddy, Tyler and Weckesser, Warren and Abbasi, Hameer and Gohlke, Christoph and
+               Oliphant, Travis E.},
+  journal   = {Nature},
+  volume    = {585},
+  number    = {7825},
+  pages     = {357--362},
+  year      = {2020},
+  publisher = {Springer Science and Business Media LLC},
+  doi       = {10.1038/s41586-020-2649-2},
+  url       = {https://doi.org/10.1038/s41586-020-2649-2},
+  note      = {Version 2.5.1 recorded in the run environment}
+}

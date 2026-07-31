@@ -328,7 +328,7 @@ All rows are over 32 prompts and 512 signed pairs. **Every value in this table i
 Only the two comparisons below carry intervals; differences between other pairs of rows were not
 tested and are not established as differences.
 
-![Final-test MAE by method and state condition](paper/figures/final_test_mae_by_method.png)
+![Final-test MAE by method](paper/figures/final_test_mae_by_method.png)
 
 The ordering of point estimates runs opposite to the study's hypothesis: the simplest model has the
 lowest MAE, the state-conditioned model sits between the visible baseline and the constant, and the
@@ -359,7 +359,7 @@ the result look like a boundary case rather than an interval that crosses. The s
 * The interval crosses zero.
 * **H-BD2 is not supported.**
 
-![Primary comparisons with 95 percent paired bootstrap intervals](paper/figures/final_test_primary_comparisons.png)
+![Per-prompt differences behind the two preregistered comparisons](paper/figures/per_prompt_differences.png)
 
 Under the decision rule fixed before the data existed, a comparison supports its hypothesis only if
 the interval excludes zero in the hypothesized direction. Neither does. Neither is a trend, and
@@ -517,7 +517,7 @@ without a GPU, without the model weights, and without the hidden states is publi
 
 ### The public replay bundle
 
-`results/public/bluedot-v0.1/` holds 21 files and replays on its own:
+`results/public/bluedot-v0.1/` holds 22 files and replays on its own:
 
 ```
 uv run csf state-audit replay-bundle --bundle results/public/bluedot-v0.1
@@ -550,7 +550,8 @@ cd results/public/bluedot-v0.1 && sha256sum -c CHECKSUMS.sha256
 | Stimulus and clean baseline | `state_audit_candidate_sets.jsonl`, `state_audit_clean_pass.jsonl` |
 | Fit provenance | `state_audit_transform_fits.jsonl`, `state_audit_predictors.jsonl`, `state_audit_wrong_state_pairing.json` |
 | Calibration | `state_audit_calibration_decision.json`, `state_audit_ratio_summaries.json`, `state_audit_reference_norm.json` |
-| Figures | `results/public/bluedot-v0.1/figures/final_test_mae_by_method.png`, `results/public/bluedot-v0.1/figures/final_test_primary_comparisons.png` |
+| Calibration observations | `state_audit_calibration_observations.jsonl`, `state_audit_calibration_candidate_sets.jsonl` |
+| Direction family | `bluedot_state_dependence_directions_v1.json` |
 | Integrity | `bundle_manifest.json`, `CHECKSUMS.sha256` |
 
 **Deliberately not published:** model weights (Gemma is not redistributed and remains under Google's
@@ -558,6 +559,28 @@ license), the layer-13 residual-stream array `state_audit_states.npz` and its in
 salt directory, local run logs, and artifacts from unrelated runs. The bundle manifest lists each
 exclusion with its reason. The post-reveal salts *are* published, inside the reveals, because a
 commitment hash cannot be checked without them.
+
+### Figure gallery
+
+Every figure is regenerated from the published bundle, which is verified before anything is drawn:
+
+```
+uv run csf state-audit plot-bundle --bundle results/public/bluedot-v0.1 --output paper/figures
+```
+
+| Figure | Question it answers |
+| --- | --- |
+| `study_overview` | What did the whole study do and find, on one page? |
+| `calibration_dose_response` | Why was ratio 0.02 chosen, and what failed at 0.10 and above? |
+| `prediction_vs_observed` | How well does each method actually track the observed effect? |
+| `per_prompt_differences` | Which prompts drive each preregistered comparison? |
+| `state_specificity` | Where does the true state sit among deliberately wrong states? |
+| `intervention_effects` | What does the chosen stimulus look like, and do answer-token directions behave differently from controls? |
+| `final_test_mae_by_method` | What is the ordering of point-estimate error across methods? |
+| `final_test_primary_comparisons` | What are the two intervals, on their own? |
+
+Each is written as both PNG and PDF at 300 dpi. Nothing is refitted or resampled to draw them, and
+no interval appears that is not in a verified artifact.
 
 ### The frozen protocol
 
@@ -574,16 +597,129 @@ git-ignored because they hold large numerical outputs and private salts.
 
 ## Reproducing
 
-Python 3.12 and uv, no GPU. The complete study is about 90 minutes of CPU forward time:
-calibration about 42 minutes, training about 26 minutes, resolution about 14 minutes.
-
-The frozen inputs are tracked and verify without loading a model:
+Python 3.12 and uv, no GPU. Start from the release tag rather than `main`:
 
 ```
+git checkout v0.1.0
+uv sync --extra dev --extra torch
+```
+
+Real Gemma weights are gated, and two separate things are needed. Authenticate with
+`uv run hf auth login`, or `uvx hf auth login` to keep it out of the project environment; the token
+is read from the Hugging Face credential store and is never printed, logged, or written to an
+artifact. Then accept the Gemma conditions on the model page, which authentication alone does not
+do. The weights are about 2.0 GB. The model is Gemma, not Gemini.
+
+### Checking the frozen inputs
+
+These load no model and take seconds. Each recomputes the artifact's own content hash before
+checking anything else, so an edited manifest fails to load rather than verifying.
+
+```
+uv run csf doctor
 uv run csf prompts verify --manifest-id bluedot_state_dependence_v1
 uv run csf directions verify-family --manifest-id bluedot_state_dependence_directions_v1
 uv run csf calibration verify-plan --plan-id bluedot_state_dependence_calibration_v1
 ```
+
+`csf directions verify-family --regenerate` rebuilds all eight vectors from the pinned weights and
+compares them, writing nothing.
+
+### Running the study
+
+About 90 minutes of CPU forward time: calibration about 42 minutes, training about 26, resolution
+about 14. Each stage refuses to start if the artifact it depends on does not verify, and a completed
+run at the same run id is refused rather than overwritten.
+
+```powershell
+# 1. Prepare the task. Needs network access; everything after this is offline.
+uv run csf data prepare --config configs/tasks/arc_mcq.yaml
+
+# 2. Freeze the prompt split. No model, no forward pass.
+uv run csf prompts manifest --config configs/prompts/bluedot_state_dependence.yaml
+
+# 3. Build the direction family. Reads the pinned output embedding and nothing else.
+uv run csf directions build-family --config configs/directions/bluedot_state_dependence.yaml
+
+# 4. Freeze the calibration plan. No model.
+uv run csf calibration plan --config configs/calibration/bluedot_state_dependence.yaml
+
+# 5. Engineering smoke. 8 prompts, 144 forwards, at a ratio fixed in advance.
+uv run csf state-audit smoke --config configs/state_audit/bluedot_smoke.yaml --run-id bluedot-smoke-layer13
+
+# 6. Calibration. 32 prompts, 2,624 forwards. Selects layer, ratio, and alpha.
+uv run csf state-audit calibrate --config configs/state_audit/bluedot_calibration_layer13.yaml --run-id bluedot-calibration-layer13
+
+# 7. The fixed intervention projection. Loads no model weights.
+uv run csf state-audit projection --config configs/state_audit/bluedot_training.yaml --projection-id bluedot_state_dependence_projection_v1
+
+# 8. Training. 96 prompts, 1,728 forwards, at the strength calibration chose.
+uv run csf state-audit train --config configs/state_audit/bluedot_training.yaml --run-id bluedot-training
+
+# 9. Final-test clean stage. 32 clean forwards, zero interventions.
+uv run csf state-audit final-test-clean --config configs/state_audit/bluedot_final_test_clean.yaml --run-id bluedot-final-test
+
+# 10. Fit and commit. Loads no model. Seals 512 forecasts before any outcome exists.
+uv run csf state-audit commit-forecasts `
+  --training-config configs/state_audit/bluedot_training.yaml --training-run-id bluedot-training `
+  --final-test-config configs/state_audit/bluedot_final_test_clean.yaml --final-test-run-id bluedot-final-test `
+  --projection-id bluedot_state_dependence_projection_v1
+
+# 11. Final-test resolution. Irreversible. 544 intervened forwards, no clean forward.
+uv run csf state-audit resolve-final-test `
+  --config configs/state_audit/bluedot_final_test_clean.yaml --run-id bluedot-final-test `
+  --layer 13 --norm-ratio 0.02 --global-alpha 106.87158268272867 `
+  --yes-i-understand-this-is-irreversible
+
+# 12. Analysis. Model-free. Nothing is fitted, refitted, tuned, or dropped.
+uv run csf state-audit analyze-final-test --run-id bluedot-final-test --training-run-id bluedot-training
+
+# 13. Publish the bundle. Loads no model. Copies only allowlisted artifacts.
+uv run csf state-audit publish-bundle `
+  --final-test-run-id bluedot-final-test --training-run-id bluedot-training `
+  --calibration-run-id bluedot-calibration-layer13
+```
+
+Step 11 refuses a dirty working tree, a setting that differs from the calibration decision, a
+commitment count other than 512, any pre-existing reveal, and any pre-existing outcome. On this
+repository it refuses outright, because the final test is already resolved and the 32 final-test
+prompts are spent.
+
+The layer-20 fallback has its own config and is refused unless `--primary-run-id` names a layer-13
+run whose decision record says `fallback_required`, so it cannot become a second attempt.
+
+### Verifying a run
+
+`csf state-audit verify-run` recomputes, from files on disk: the run manifest's own content hash,
+every artifact hash, every observation's target from its own logits, the reference norm from the
+recorded clean state norms, and the single global alpha per grid point. For a calibration run it
+re-derives the decision from the summaries beside it and refuses a selected ratio that is not the
+smallest passing one. `--compare-run-id` compares two runs of the same inputs row by row, which is
+how cross-process determinism was measured.
+
+```
+uv run csf state-audit verify-run --run-id bluedot-calibration-layer13
+uv run csf state-audit verify-run --run-id bluedot-training
+uv run csf state-audit verify-commitments --run-id bluedot-final-test
+```
+
+### The offline fixture pipeline
+
+The original trial and commitment loop runs end to end on a locally built fixture model, no weights
+downloaded:
+
+```
+uv run csf directions synthetic --config configs/experiments/smoke.yaml
+uv run csf interventions validate --config configs/experiments/smoke.yaml
+uv run csf trials generate --config configs/experiments/smoke.yaml --max-trials 8
+uv run csf trials resolve --run-id <RUN_ID> --ground-truth
+```
+
+There is no CLI command that commits a forecast in that loop; `commit_forecasts` is reachable from
+Python only. The full generate, resolve, fit, commit, resolve, score cycle is exercised by
+`tests/integration/test_resolve.py::test_full_pipeline_generate_resolve_fit_commit_score`.
+
+### Integrity guarantees
 
 Every artifact recomputes its own content hash when it loads, so an edited file fails to parse
 rather than quietly verifying. Every run manifest cites the hashes of everything upstream of it:
@@ -595,6 +731,30 @@ task manifest -> prompt manifest -> direction family -> calibration plan -> run 
 Determinism comes from one master seed, `20260727`, threaded through a seed-derivation function
 with a namespaced label per purpose, so changing one seeded step cannot shift another. Commitment
 salts are the deliberate exception and come from the OS CSPRNG.
+
+These rules are enforced by tests rather than by good intentions:
+
+* `tests/test_no_fake_results.py` fails if a public export exists that did not verify.
+* `PublicDashboardRecord` cannot be constructed for an unverified run, and `MetricValue` cannot be
+  constructed without a sample count and an interval.
+* `scientific_result` is a typed `Literal[False]` on every engineering record, so a record claiming
+  otherwise cannot be constructed at all.
+* A `MethodConditionSummary` carrying a Brier score computed over fewer than 20 flips cannot be
+  constructed, and a `PairedComparison` refuses a `supported` flag not implied by its own interval.
+* Model revisions cannot be `main`; `ModelSpec` rejects moving pointers.
+* `tests/test_protocol_copies.py` checks every frozen artifact against the hash the resolution
+  manifest cites, and fails if a second copy of one appears.
+* Salts, selection seeds, and private payloads never enter version control, and CI greps the tracked
+  file list to confirm it.
+
+### Quality checks
+
+```
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+```
 
 ## License and citation
 

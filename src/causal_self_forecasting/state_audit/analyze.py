@@ -58,7 +58,10 @@ from ..scoring.metrics import (
     top_effect_accuracy,
 )
 from ..trials.commitment import read_forecasts, record_key, verify_run_commitments
-from .resolve import load_resolution_manifest
+
+# `resolve` imports torch, and this module must stay importable without it: the public figure
+# suite and the model-free replay both come through here, and neither should drag the model
+# stack into the process. `analyze_final_test` imports it at call time instead.
 
 ANALYSIS_ALGORITHM_VERSION = "bluedot_final_test_analysis_v1.0"
 
@@ -483,6 +486,8 @@ def analyze_final_test(run_id: str, training_run_id: str, force: bool = False) -
             "the numbers is how a decision rule gets renegotiated. Pass force only to repair a "
             "documented bug, and record the bug and the change in docs/experiment_log.md."
         )
+
+    from .resolve import load_resolution_manifest
 
     resolution = load_resolution_manifest(run_id)
     if resolution.status != "complete":

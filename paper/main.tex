@@ -363,8 +363,9 @@ between rows that are not tested there are not established as differences.}
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.78\textwidth]{figures/final_test_mae_by_method.png}
-\caption{Prompt-aggregated MAE by method and state condition. The vertical band spans the ten
-shuffled-state controls.}
+\caption{Prompt-aggregated MAE by method, sorted. Bars are point estimates and carry no
+interval because none was computed for them. The ten shuffled-state controls appear separately in
+Figure~\ref{fig:specificity}.}
 \label{fig:mae}
 \end{figure}
 
@@ -390,9 +391,12 @@ in either direction, and with 32 prompt groups this design has limited power to 
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.78\textwidth]{figures/final_test_primary_comparisons.png}
-\caption{Both primary comparisons with 95\% paired bootstrap intervals over 32 prompt groups,
-10{,}000 resamples, seed 1394099119. Both intervals cross zero.}
+\includegraphics[width=0.86\textwidth]{figures/per_prompt_differences.png}
+\caption{The two preregistered comparisons and the per-prompt differences behind them. Each
+bar is one final-test prompt's mean absolute error over its 16 non-no-op interventions, sorted
+independently within each panel; the dashed line is the overall point estimate and each title
+carries the preregistered interval. Both cross zero. The per-prompt view is included because a
+paired difference of this size is easy to over-read from a single summary number.}
 \label{fig:primary}
 \end{figure}
 
@@ -492,11 +496,12 @@ checkpoints and datasets.
 Everything needed to check the result without a GPU, without the model weights, and without the
 hidden states is published.
 
-\paragraph{Public replay bundle.} \texttt{results/public/bluedot-v0.1/} holds 21 files: the analysis
+\paragraph{Public replay bundle.} \texttt{results/public/bluedot-v0.1/} holds 22 files: the analysis
 of record, the resolution manifest, the aggregated and pair-level score tables, all 512 sealed
-forecasts, their commitments, all 512 reveals with their salts, the frozen calibration decision and
-its evidence, transform and predictor fit provenance, both figures, a bundle manifest, and
-\texttt{CHECKSUMS.sha256} in the format \texttt{sha256sum -c} accepts. It replays on its own:
+forecasts, their commitments, all 512 reveals with their salts, the frozen calibration decision with
+its observations and evidence, the direction family, transform and predictor fit provenance, a
+bundle manifest, and \texttt{CHECKSUMS.sha256} in the format \texttt{sha256sum -c} accepts. It
+carries no images: every figure in this paper is regenerated from it. It replays on its own:
 
 \begin{quote}\ttfamily\small
 csf state-audit replay-bundle -{}-bundle results/public/bluedot-v0.1
@@ -522,6 +527,61 @@ committed once and never modified.
 \paragraph{Not published.} Model weights (Gemma remains under Google's license), the layer-13
 residual-stream arrays, and the pre-reveal salt directory. Code, frozen manifests, and the bundle
 are MIT licensed.
+
+\appendix
+
+\section{Figure gallery}
+\label{app:figures}
+
+Every figure in this paper, and the four below, are regenerated from the published bundle by
+
+\begin{quote}\ttfamily\small
+csf state-audit plot-bundle -{}-bundle results/public/bluedot-v0.1 -{}-output paper/figures
+\end{quote}
+
+\noindent which verifies the bundle's checksums and its stored analysis hash before drawing
+anything. Every plotted value is read from a stored artifact; nothing is refitted or resampled.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.82\textwidth]{figures/study_overview.png}
+\caption{The whole study on one page: the calibration diagnostics that chose the stimulus before
+any forecast existed (top), and the final test (bottom).}
+\label{fig:overview}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.62\textwidth]{figures/calibration_dose_response.png}
+\caption{Calibration dose response. Shaded strengths failed the preregistered p95 ceiling, and only
+that condition. 0.05 also passed; 0.02 was selected because the rule takes the smallest passing
+ratio.}
+\label{fig:dose}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.70\textwidth]{figures/prediction_vs_observed.png}
+\caption{Predicted against observed effect for the four ridge conditions, identical axes
+throughout. The spread around $y=x$ is what the headline MAE summarises.}
+\label{fig:scatter}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.82\textwidth]{figures/state_specificity.png}
+\caption{The true-state score against the ten deranged-state controls. The controls are
+descriptive: ten point estimates over ten seeds, not a null distribution and not a test.}
+\label{fig:specificity}
+\end{figure}
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.80\textwidth]{figures/intervention_effects.png}
+\caption{Calibration diagnostics at the selected strength, not the forecasting result. The lower
+two panels show identical counts by coincidence.}
+\label{fig:effects}
+\end{figure}
 
 {\small
 \bibliographystyle{plainnat}

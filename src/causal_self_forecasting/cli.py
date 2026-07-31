@@ -1101,6 +1101,30 @@ def state_audit_replay_bundle(
         raise typer.Exit(code=1)
 
 
+@state_audit_app.command("plot-bundle")
+def state_audit_plot_bundle(
+    bundle_path: Path = typer.Option(..., "--bundle", help="Path to the public bundle directory."),
+    output: Path = typer.Option(
+        Path("paper/figures"), "--output", help="Directory to write figures into."
+    ),
+) -> None:
+    """Draw the publication figures from a verified public bundle. Loads no model.
+
+    The bundle is replayed first and no figure is written unless it verifies. Every number comes
+    from a stored artifact, nothing is refitted, and no test beyond the two preregistered
+    comparisons is displayed.
+    """
+    from .state_audit.plots import PlotError, plot_bundle
+
+    try:
+        report = plot_bundle(bundle_path, output)
+    except PlotError as error:
+        typer.secho(f"could not plot the bundle: {error}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from error
+
+    _echo_json(report)
+
+
 @state_audit_app.command("verify-commitments")
 def state_audit_verify_commitments(
     run_id: str = typer.Option(..., "--run-id", help="Final-test run id to verify."),

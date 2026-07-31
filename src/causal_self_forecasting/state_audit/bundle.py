@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..config import repo_root
 from ..hashing import atomic_write_json, hash_file, read_json
 from ..logging_utils import info
 from ..paths import (
@@ -41,7 +42,6 @@ from ..paths import (
     STATE_AUDIT_CLEAN_PASS,
     STATE_AUDIT_COMMITMENT_SUMMARY,
     STATE_AUDIT_DECISION,
-    STATE_AUDIT_FIGURES,
     STATE_AUDIT_METHOD_SUMMARY,
     STATE_AUDIT_OBSERVATIONS,
     STATE_AUDIT_PAIR_SCORES,
@@ -68,6 +68,11 @@ FORBIDDEN_SUFFIXES = (".npz", ".npy", ".pt", ".pth", ".ckpt", ".safetensors", ".
 FORBIDDEN_PARTS = ("private_payloads", "salts")
 
 
+CALIBRATION_OBSERVATIONS = "state_audit_calibration_observations.jsonl"
+CALIBRATION_CANDIDATE_SETS = "state_audit_calibration_candidate_sets.jsonl"
+DIRECTION_FAMILY = "bluedot_state_dependence_directions_v1.json"
+
+
 @dataclass(frozen=True)
 class BundleEntry:
     """One file to publish: where it comes from, what it is called, and why it is here."""
@@ -76,6 +81,12 @@ class BundleEntry:
     filename: str
     category: str
     required: bool = True
+    published_as: str | None = None
+
+    @property
+    def target_name(self) -> str:
+        """The name inside the bundle. Renamed only where two runs use the same filename."""
+        return self.published_as or self.filename
 
 
 # Every file in the bundle, and nothing else. `source_run` is a key into the run-id mapping passed
@@ -106,10 +117,43 @@ BUNDLE_CONTENTS: tuple[BundleEntry, ...] = (
     # the hash of the fitted object; they contain no coefficients and no state arrays.
     BundleEntry("training", STATE_AUDIT_TRANSFORM_FITS, "fit_provenance"),
     BundleEntry("training", STATE_AUDIT_PREDICTORS, "fit_provenance"),
-    # The frozen stimulus decision and the evidence behind it.
+    # The frozen stimulus decision and the evidence behind it. The calibration observations are
+    # here so the calibration diagnostics in `plot-bundle` can be drawn from the bundle alone;
+    # without them the dose-response and direction-role panels would need a run directory.
     BundleEntry("calibration", STATE_AUDIT_DECISION, "calibration"),
     BundleEntry("calibration", STATE_AUDIT_RATIO_SUMMARIES, "calibration"),
     BundleEntry("calibration", STATE_AUDIT_REFERENCE_NORM, "calibration"),
+    #
+    # These two are optional only because a fixture calibration run synthesizes its decision
+    # without executing prompts, so it has no observations to publish. A real bundle has them, and
+    # `plot-bundle` refuses to draw the calibration diagnostics without them. Anything absent is
+    # listed in the manifest under `absent_optional`, so an incomplete bundle says so.
+    BundleEntry(
+        "calibration",
+        STATE_AUDIT_OBSERVATIONS,
+        "calibration",
+        required=False,
+        published_as=CALIBRATION_OBSERVATIONS,
+    ),
+    # The calibration candidate sets carry the sign of each signed intervention, which the
+    # observations do not. Without them the flip-rate-by-sign diagnostic is not derivable.
+    BundleEntry(
+        "calibration",
+        STATE_AUDIT_CANDIDATE_SETS,
+        "calibration",
+        required=False,
+        published_as=CALIBRATION_CANDIDATE_SETS,
+    ),
+)
+
+# The direction-family manifest is tracked once under data/, but a bundle has to stand alone: the
+# calibration diagnostics split flip rates by construction role, and only this manifest maps an
+# opaque direction id to its role. This is a distribution copy, not a second working copy.
+BUNDLE_TRACKED_INPUTS: tuple[tuple[Path, str], ...] = (
+    (
+        Path("data/direction_manifests/bluedot_state_dependence_directions_v1.json"),
+        "direction_family",
+    ),
 )
 
 EXCLUDED_AND_WHY: tuple[tuple[str, str], ...] = (
@@ -122,6 +166,11 @@ EXCLUDED_AND_WHY: tuple[tuple[str, str], ...] = (
     ("run.log.jsonl", "local execution log, not evidence"),
     ("model weights", "never redistributed; Gemma remains under Google's license"),
     ("other runs", "smoke, determinism, and benchmark runs are not part of this result"),
+    (
+        "figures/",
+        "regenerated from this bundle by `csf state-audit plot-bundle`; shipping images as well "
+        "would publish a second copy that goes stale",
+    ),
 )
 
 
@@ -172,6 +221,7 @@ def build_public_bundle(
 
     published: list[dict[str, Any]] = []
     missing: list[str] = []
+    absent_optional: list[str] = []
     for entry in BUNDLE_CONTENTS:
         run_id = run_ids.get(entry.source_run)
         if run_id is None:
@@ -180,44 +230,51 @@ def build_public_bundle(
         if not source.exists():
             if entry.required:
                 missing.append(f"{run_id}/{entry.filename}")
+            else:
+                absent_optional.append(entry.target_name)
             continue
         _refuse_forbidden([source])
-        shutil.copy2(source, target / entry.filename)
+        shutil.copy2(source, target / entry.target_name)
         published.append(
             {
                 "category": entry.category,
-                "path": entry.filename,
-                "sha256": hash_file(target / entry.filename),
+                "path": entry.target_name,
+                "sha256": hash_file(target / entry.target_name),
                 "source_run_id": run_id,
                 "source_role": entry.source_run,
+            }
+        )
+
+    for relative, category in BUNDLE_TRACKED_INPUTS:
+        source = repo_root() / relative
+        if not source.exists():
+            missing.append(str(relative))
+            continue
+        _refuse_forbidden([source])
+        shutil.copy2(source, target / source.name)
+        published.append(
+            {
+                "category": category,
+                "path": source.name,
+                "sha256": hash_file(target / source.name),
+                "source_run_id": None,
+                "source_role": "tracked_input",
             }
         )
 
     if missing:
         raise BundleError(f"cannot build the bundle, these artifacts are missing: {missing}")
 
-    figures_source = run_dir(run_ids["final_test"]) / STATE_AUDIT_FIGURES
-    if figures_source.is_dir():
-        figures_target = target / STATE_AUDIT_FIGURES
-        figures_target.mkdir(parents=True, exist_ok=True)
-        for figure in sorted(figures_source.glob("*.png")):
-            _refuse_forbidden([figure])
-            shutil.copy2(figure, figures_target / figure.name)
-            published.append(
-                {
-                    "category": "figure",
-                    "path": f"{STATE_AUDIT_FIGURES}/{figure.name}",
-                    "sha256": hash_file(figures_target / figure.name),
-                    "source_run_id": run_ids["final_test"],
-                    "source_role": "final_test",
-                }
-            )
-
+    # No figures. The bundle carries data, not pictures of data: every figure is a deterministic
+    # function of what is here, produced by `csf state-audit plot-bundle`. Shipping images as well
+    # would mean two versions of the same chart with the same filename, and the copy inside the
+    # bundle would go stale the moment the figure code improved.
     _refuse_forbidden(p for p in target.rglob("*") if p.is_file())
 
     analysis = read_json(target / STATE_AUDIT_ANALYSIS)
     resolution = read_json(target / STATE_AUDIT_RESOLUTION)
     manifest: dict[str, Any] = {
+        "absent_optional": sorted(absent_optional),
         "algorithm_version": BUNDLE_ALGORITHM_VERSION,
         "analysis_hash": analysis["analysis_hash"],
         "bundle_id": bundle_id,
@@ -336,7 +393,10 @@ __all__ = [
     "BUNDLE_CONTENTS",
     "BUNDLE_ID",
     "BUNDLE_MANIFEST",
+    "BUNDLE_TRACKED_INPUTS",
+    "CALIBRATION_OBSERVATIONS",
     "CHECKSUM_FILE",
+    "DIRECTION_FAMILY",
     "EXCLUDED_AND_WHY",
     "BundleEntry",
     "BundleError",

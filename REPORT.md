@@ -1,6 +1,6 @@
-# Testing Prompt-Specific Hidden-State Access for Intervention-Effect Forecasting
+# A Precommitted Benchmark for Activation-Intervention Forecasting
 
-A preregistered null result in Gemma 3 1B.
+A null test of prompt-specific hidden-state features in Gemma 3 1B.
 
 Jacob Ortiz. Study id `bluedot_state_dependence`. Resolved 2026-07-30.
 
@@ -12,8 +12,18 @@ We asked whether a language model's own hidden state carries information about t
 activation intervention that is not already available from the prompt, the model's clean output
 distribution, and a complete numerical description of the intervention itself.
 
-**Under this setup, no improvement from state access was detected.** That is the finding, and it is
-deliberately narrower than "the state carries nothing."
+This repository is primarily a **benchmark**: a precommitted task for forecasting the effect of an
+activation intervention before it is applied, with an intervention-only baseline, a
+visible-information baseline, a matched wrong-state specificity control, forecast-before-outcome
+ordering that is provable from artifacts, and a standalone replay bundle. The null below is its
+first application, not its point.
+
+**Under this setup, no improvement from state access was detected.** The scope is narrow by
+construction: on this fixed family of 16 signed interventions, neither the tested prompt features
+nor the tested hidden-state representation produced a detected forecasting improvement over
+intervention-level information. That does not imply hidden states carry no useful information, that
+the tested methods are equivalent, that the state-conditioned model is established to be worse, or
+that anything here extends to unseen interventions, other models, layers, tasks, or state readouts.
 
 Three ridge regressions were fitted on 96 training prompts and then frozen. All three received an
 identical 16-dimensional numerical encoding of the intervention. One received nothing else. One
@@ -96,6 +106,16 @@ readiness.
 | Primary control | Deterministic nearest matched wrong state |
 | Secondary control | Ten seeded deranged state permutations |
 | Analysis | Prompt-first aggregation, 10,000 paired bootstrap resamples over prompt groups |
+
+**The intervention family is fixed, and that shapes what the comparisons test.** The strength is a
+single global alpha and the same eight directions are used at every stage, so the intervention block
+takes only 16 distinct non-no-op values in the entire study. The intervention-only ridge therefore
+emits one prediction per signed direction and cannot condition on the prompt at all: it is a
+regularized table of direction-specific average effects. This is the correct reading of the frozen
+design, not a defect found afterwards. It means the question actually being asked is whether visible
+prompt information or prompt-specific state information explains residual variation beyond those
+direction-level effects, and it means no method is asked to generalize to an intervention it has not
+seen.
 
 The split is disjoint by item and by group, drawn deterministically from 256 eligible ARC groups by
 a seeded permutation of group ids. Selection never reads correctness, confidence, logits, or hidden
@@ -485,6 +505,19 @@ experiment, and nothing in this report should be read as having attempted one.
   representation.
 * **Only six answer flips.** Flip-based metrics are uninformative at this count, and the Brier
   score was correctly withheld.
+* **No test of generalization to unseen interventions.** Training and final test share the same
+  eight directions and two signs, so every method interpolates across prompts within a known
+  intervention family, and the intervention-only ridge is a table over exactly those 16 entries. A
+  held-out-direction design would answer a different question and was not run. Because the final
+  test is spent, answering it needs a new experiment: a larger direction family, directions split
+  into fitting and held-out sets before any outcome exists, disjoint prompts, and a fresh
+  preregistered split, decision rule, and final test.
+* **The intervened activation may be off manifold.** Calibration constrained the size of the output
+  effect, not the naturalness of the intervened activation. The p95 ceiling limited extreme changes
+  in the answer margin, but it did not establish that `h + alpha*d` remained in a region of
+  activation space reached during ordinary execution. Off-manifold interventions can produce causal
+  responses that do not faithfully characterize the model's usual computation (Makelov, Lange, and
+  Nanda, ICLR 2024). This was not measured; we do not claim the interventions were off manifold.
 * **The intervention-only representation may already contain most of the predictable signal.** The
   intervention block alone achieved the best score of any method. If the effect of these directions
   is largely prompt-independent, there is little residual variance for state information to explain,
@@ -509,6 +542,44 @@ experiment, and nothing in this report should be read as having attempted one.
 * Compare learned continuous-token explainers against this benchmark's baselines.
 * Improve the state representation without tuning on this final test, which is now spent.
 * Run a direct reproduction using released Qwen or Llama checkpoints and datasets.
+
+## Post hoc descriptive decomposition
+
+**Not preregistered.** Conceived after the preregistered result was observed. No test statistic, no
+interval, no p-value, and no conclusion above depends on it. It reads only final-test outcomes
+already published in the replay bundle.
+
+The final test is a balanced 32 x 16 matrix: every prompt received every signed direction exactly
+once. Writing `y_pd` for the outcome of prompt `p` under signed direction `d`, the additive
+decomposition `y_pd = mu + a_p + b_d + r_pd` partitions the total sum of squares exactly, where
+`a_p` is the prompt mean minus the grand mean, `b_d` the signed-direction mean minus the grand mean,
+and `r_pd` the remainder. Population definitions are used throughout. The residual is
+prompt-by-direction structure, not measurement noise: the harness is deterministic and the no-op
+target is exactly zero.
+
+| Component | Sum of squares | Share of total |
+| --- | --: | --: |
+| Signed-direction main effects | 14.648546 | 13.0 percent |
+| Prompt main effects | 3.323788 | 3.0 percent |
+| Prompt x direction structure | 94.668160 | 84.0 percent |
+| Total | 112.640494 | 100.0 percent |
+
+The components reconstruct the total exactly (reconstruction error 0.0). Grand mean -0.097095 over
+512 outcomes.
+
+This reframes why the intervention-only ridge wins. It is **not** that direction effects dominate
+the outcome: they are 13 percent of it. It is that direction effects are the component any of these
+methods reliably captured, while the 84 percent sitting in prompt-by-direction structure went
+unexplained by all of them, including the bilinear model built specifically for it. A method that
+could capture that interaction would have a great deal of room; none of the ones tested did.
+
+Per-direction detail, including each signed direction's observed mean effect, the intervention-only
+prediction for it, and the within-direction spread across prompts, is in
+[`paper/data/exploratory_direction_decomposition.json`](paper/data/exploratory_direction_decomposition.json).
+That file cites the frozen analysis hash and the source artifact hashes, and records
+`preregistered: false` and `inferential: false`.
+
+![Post hoc descriptive decomposition](paper/figures/exploratory_direction_structure.png)
 
 ## Data, code, and artifact availability
 
@@ -578,6 +649,7 @@ uv run csf state-audit plot-bundle --bundle results/public/bluedot-v0.1 --output
 | `intervention_effects` | What does the chosen stimulus look like, and do answer-token directions behave differently from controls? |
 | `final_test_mae_by_method` | What is the ordering of point-estimate error across methods? |
 | `final_test_primary_comparisons` | What are the two intervals, on their own? |
+| `exploratory_direction_structure` | Where does the outcome variation sit? (post hoc, descriptive) |
 
 Each is written as both PNG and PDF at 300 dpi. Nothing is refitted or resampled to draw them, and
 no interval appears that is not in a verified artifact.

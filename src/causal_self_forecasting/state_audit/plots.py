@@ -88,6 +88,7 @@ FIGURE_NAMES: tuple[str, ...] = (
     "final_test_mae_by_method",
     "final_test_primary_comparisons",
     "intervention_effects",
+    "exploratory_direction_structure",
 )
 
 
@@ -108,6 +109,7 @@ class BundleData:
     calibration_observations: list[dict[str, Any]]
     direction_roles: dict[str, str]
     calibration_signs: dict[tuple[str, str], int]
+    bundle_path: Path
 
     def summary(self, key: str) -> dict[str, Any]:
         for row in self.method_summary["methods"]:
@@ -191,6 +193,7 @@ def load_bundle(directory: Path) -> BundleData:
         calibration_observations=list(read_jsonl(need(CALIBRATION_OBSERVATIONS))),
         direction_roles={d["opaque_id"]: d["construction_role"] for d in family["directions"]},
         calibration_signs=signs,
+        bundle_path=directory,
     )
 
 
@@ -773,6 +776,81 @@ def figure_primary_comparisons(data: BundleData) -> Figure:
     return fig
 
 
+def figure_exploratory_direction_structure(data: BundleData) -> Figure:
+    """Where the final-test variation actually sits. Descriptive; no test is displayed."""
+    from .exploratory import decompose_direction_structure
+
+    decomposition = decompose_direction_structure(data.bundle_path)
+    shares = decomposition["shares_of_total"]
+    order = [
+        ("prompt_by_direction_residual", "Prompt x direction\nstructure"),
+        ("direction_main_effects", "Signed-direction\nmain effects"),
+        ("prompt_main_effects", "Prompt\nmain effects"),
+    ]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.2, 4.1), width_ratios=[1.0, 1.25])
+
+    positions = range(len(order))
+    values = [100.0 * shares[key] for key, _ in order]
+    axes[0].barh(list(positions), values, color=[CONTROL, PRIMARY, MUTED], height=0.6, zorder=2)
+    axes[0].set_yticks(list(positions))
+    axes[0].set_yticklabels([label for _, label in order])
+    for position, value in zip(positions, values, strict=True):
+        axes[0].annotate(
+            f"{value:.1f}%",
+            (value, position),
+            textcoords="offset points",
+            xytext=(4, 0),
+            va="center",
+            fontsize=7.5,
+            color=INK,
+        )
+    axes[0].set_xlim(0, 100)
+    axes[0].set_xlabel("share of total outcome variation (%)")
+    axes[0].set_title("Most variation is prompt-by-direction")
+    axes[0].grid(axis="y", visible=False)
+
+    summaries = sorted(decomposition["direction_summaries"], key=lambda s: s["signed_direction_id"])
+    observed = [s["observed_mean_effect"] for s in summaries]
+    predicted = [s["intervention_only_prediction"] for s in summaries]
+    span = [min(observed + predicted), max(observed + predicted)]
+    pad = 0.08 * (span[1] - span[0])
+    limits = (span[0] - pad, span[1] + pad)
+    axes[1].plot(limits, limits, color=MUTED, linestyle="--", linewidth=0.9, zorder=1)
+    axes[1].scatter(observed, predicted, s=34, color=PRIMARY, zorder=3, edgecolors="white", lw=0.5)
+    for summary, x, y in zip(summaries, observed, predicted, strict=True):
+        short = summary["direction_ref"].split(".")[-1][:4] + ("+" if summary["sign"] > 0 else "-")
+        axes[1].annotate(
+            short,
+            (x, y),
+            textcoords="offset points",
+            xytext=(5, 2),
+            fontsize=6.2,
+            color=MUTED,
+        )
+    axes[1].set_xlim(limits)
+    axes[1].set_ylim(limits)
+    axes[1].set_aspect("equal", adjustable="box")
+    axes[1].set_xlabel("observed final-test mean effect")
+    axes[1].set_ylabel("intervention-only prediction")
+    axes[1].set_title("Per-direction means track their predictions")
+
+    fig.suptitle(
+        "Post hoc descriptive analysis; no inferential test",
+        fontsize=10.5,
+        fontweight="bold",
+    )
+    fig.tight_layout(rect=(0, 0.02, 1, 0.93))
+    _footnote(
+        fig,
+        "Conceived after the preregistered result was observed and reported as description only. "
+        "Left: a balanced two-way partition of the 32 x 16 final-test outcomes; the three shares "
+        "sum to 100 percent by construction. Right: one point per signed direction, 32 prompts "
+        "each. Labels are truncated opaque identifiers. No interval, no test, no p-value.",
+    )
+    return fig
+
+
 BUILDERS = {
     "study_overview": figure_study_overview,
     "calibration_dose_response": figure_calibration_dose_response,
@@ -782,10 +860,11 @@ BUILDERS = {
     "final_test_mae_by_method": figure_mae_by_method,
     "final_test_primary_comparisons": figure_primary_comparisons,
     "intervention_effects": figure_intervention_effects,
+    "exploratory_direction_structure": figure_exploratory_direction_structure,
 }
 
 
-def plot_bundle(bundle_path: Path, output: Path) -> dict[str, Any]:
+def plot_bundle(bundle_path: Path, output: Path, data_output: Path | None = None) -> dict[str, Any]:
     """Verify the bundle, then draw every figure from it. Loads no model.
 
     Verification is not optional and not a flag. If the bundle's checksums or its stored analysis
@@ -812,6 +891,15 @@ def plot_bundle(bundle_path: Path, output: Path) -> dict[str, Any]:
             written.append(path.name)
     info("figures written", count=len(written), output=str(output))
 
+    # The post hoc decomposition travels with the figure that shows it, so the machine-readable
+    # numbers and the picture can never disagree.
+    from .exploratory import write_decomposition
+
+    data_dir = data_output if data_output is not None else output.parent / "data"
+    decomposition_path = write_decomposition(
+        bundle_path, data_dir / "exploratory_direction_decomposition.json"
+    )
+
     return {
         "algorithm_version": PLOT_ALGORITHM_VERSION,
         "analysis_hash": data.analysis["analysis_hash"],
@@ -820,6 +908,7 @@ def plot_bundle(bundle_path: Path, output: Path) -> dict[str, Any]:
         "checksums_checked": replay["checksums_checked"],
         "figures": sorted(written),
         "figure_count": len(FIGURE_NAMES),
+        "exploratory_decomposition": str(decomposition_path),
         "output": str(output),
         "notes": (
             "Drawn from the verified public bundle. No model was loaded, nothing was refitted, "

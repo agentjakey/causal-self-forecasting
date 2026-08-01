@@ -15,11 +15,13 @@ abstract: >-
   ridge regressions fitted and controlled by the authors; a ridge regression reading a residual
   stream is a readout, not a self-report. Includes a frozen prompt split, a constructed
   direction family, preregistered intervention-strength calibration, a matched wrong-state
-  control, and a salted-hash precommitment protocol. The final test resolved on 2026-07-30 and
-  returned a null result: both preregistered comparisons produced 95 percent paired bootstrap
-  intervals that cross zero, and the best-performing method used the intervention encoding alone.
-  This is not evidence that hidden states carry no information about intervention effects, and it
-  says nothing about introspection or about larger models.
+  control, and a salted-hash precommitment protocol. The contribution is primarily the benchmark;
+  the first application returned a null. Both preregistered comparisons produced 95 percent paired
+  bootstrap intervals that cross zero, and the lowest point-estimate error came from the
+  intervention encoding alone. Training and final test shared a fixed family of 16 signed
+  interventions, so no method was asked to generalize to an unseen intervention. This is not
+  evidence that hidden states carry no information about intervention effects, and it says nothing
+  about introspection or about larger models.
 keywords:
   - interpretability
   - ai-safety

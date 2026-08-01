@@ -1,5 +1,5 @@
-% References for "Hidden-State Access Does Not Improve Intervention-Effect Forecasting in a
-% 1B Instruction-Tuned Model".
+% References for "A Precommitted Benchmark for Activation-Intervention Forecasting: A Null Test of
+% Prompt-Specific Hidden-State Features in Gemma 3 1B".
 %
 % POLICY FOR THIS FILE
 % Every entry below was checked against an authoritative source: the arXiv abstract page, the
@@ -207,4 +207,76 @@
   doi       = {10.1038/s41586-020-2649-2},
   url       = {https://doi.org/10.1038/s41586-020-2649-2},
   note      = {Version 2.5.1 recorded in the run environment}
+}
+
+% ---------------------------------------------------------------------------
+% Probing methodology
+% ---------------------------------------------------------------------------
+
+% Verified against the ACL Anthology record https://aclanthology.org/D19-1275/ (title, two authors,
+% venue, month, address, publisher, pages, DOI), whose own BibTeX block matches this entry.
+@inproceedings{hewitt2019control,
+  title     = {{Designing and Interpreting Probes with Control Tasks}},
+  author    = {Hewitt, John and Liang, Percy},
+  booktitle = {Proceedings of the 2019 Conference on Empirical Methods in Natural Language
+               Processing and the 9th International Joint Conference on Natural Language
+               Processing (EMNLP-IJCNLP)},
+  month     = nov,
+  year      = {2019},
+  address   = {Hong Kong, China},
+  publisher = {Association for Computational Linguistics},
+  pages     = {2733--2743},
+  doi       = {10.18653/v1/D19-1275},
+  url       = {https://aclanthology.org/D19-1275/}
+}
+
+% Verified against the ACL Anthology record https://aclanthology.org/2022.cl-1.7/.
+@article{belinkov2022probing,
+  title     = {{Probing Classifiers: Promises, Shortcomings, and Advances}},
+  author    = {Belinkov, Yonatan},
+  journal   = {Computational Linguistics},
+  volume    = {48},
+  number    = {1},
+  pages     = {207--219},
+  year      = {2022},
+  publisher = {MIT Press},
+  doi       = {10.1162/coli_a_00422},
+  url       = {https://aclanthology.org/2022.cl-1.7/}
+}
+
+% Verified against the ACL Anthology record https://aclanthology.org/2020.emnlp-main.14/.
+@inproceedings{voita2020mdl,
+  title     = {{Information-Theoretic Probing with Minimum Description Length}},
+  author    = {Voita, Elena and Titov, Ivan},
+  booktitle = {Proceedings of the 2020 Conference on Empirical Methods in Natural Language
+               Processing (EMNLP)},
+  month     = nov,
+  year      = {2020},
+  address   = {Online},
+  publisher = {Association for Computational Linguistics},
+  pages     = {183--196},
+  doi       = {10.18653/v1/2020.emnlp-main.14},
+  url       = {https://aclanthology.org/2020.emnlp-main.14/}
+}
+
+% ---------------------------------------------------------------------------
+% Reliability of subspace interventions
+% ---------------------------------------------------------------------------
+
+% AUTHOR LIST NOTE. Two independent sources agree on three authors: the arXiv abstract page for
+% 2311.17030 (v2, 2023-12-06) and the dblp record for the ICLR 2024 conference version. Atticus
+% Geiger is an author of the reply, arXiv:2401.12631 (Wu, Geiger, Huang, Arora, Icard, Potts,
+% Goodman), not of this paper; secondary summaries that list him here appear to conflate the two.
+% Cited as ICLR 2024 per dblp, with the arXiv identifier for retrieval.
+@inproceedings{makelov2024subspace,
+  title         = {{Is This the Subspace You Are Looking for? An Interpretability Illusion for
+                   Subspace Activation Patching}},
+  author        = {Makelov, Aleksandar and Lange, Georg and Nanda, Neel},
+  booktitle     = {International Conference on Learning Representations (ICLR)},
+  year          = {2024},
+  eprint        = {2311.17030},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  doi           = {10.48550/arXiv.2311.17030},
+  url           = {https://arxiv.org/abs/2311.17030}
 }

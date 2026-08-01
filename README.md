@@ -3,12 +3,17 @@
 **Does a language model's hidden state carry information about what an intervention will do to its
 answer, beyond what you can already read off the prompt and the output?**
 
-We add a fixed vector to layer 13 of `google/gemma-3-1b-it` on ARC-Challenge prompts and measure how
-far it shifts the margin around the model's own preferred answer. Three ridge regressions were
-fitted on 96 prompts and frozen; all three see an identical numerical description of the
-intervention, one also sees the prompt and clean logits, and one also sees the model's actual hidden
-state. Every prediction for the 32 held-out prompts was sealed under a salted hash before a single
-final-test intervention ran. **Under this setup, no improvement from state access was detected.**
+This is a **precommitted benchmark** for forecasting what an activation intervention will do before
+applying it, plus a first application that returns a null. We add a fixed vector to layer 13 of
+`google/gemma-3-1b-it` on ARC-Challenge prompts and measure how far it shifts the margin around the
+model's own preferred answer. Three ridge regressions were fitted on 96 prompts and frozen; all
+three see an identical numerical description of the intervention, one also sees the prompt and clean
+logits, and one also sees the model's actual hidden state. Every prediction for the 32 held-out
+prompts was sealed under a salted hash before a single final-test intervention ran. **Under this
+setup, no improvement from state access was detected.**
+
+Training and the final test share one fixed family of 16 signed interventions, so no method was
+asked to generalize to an intervention it had not seen.
 
 ## Result
 
